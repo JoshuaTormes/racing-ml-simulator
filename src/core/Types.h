@@ -16,14 +16,15 @@ struct StepResult {
     bool done;
 };
 
-// Configurable reward weights (all fields overridable)
+// Fitness = w_progress * maxProgress + w_speed * avgSpeed
+//           (+ w_finish on completion, - w_crash on collision — each applied once)
+// idle_eps: speed threshold for stall detection (px/s), not a fitness weight
 struct RewardConfig {
     float w_progress = 1.0f;
-    float w_speed    = 0.1f;
-    float w_idle     = 0.05f;
+    float w_speed    = 2.0f;
     float w_finish   = 100.0f;
-    float w_crash    = 50.0f;
-    float idle_eps   = 5.0f; // speed threshold for idle penalty (px/s)
+    float w_crash    = 5.0f;
+    float idle_eps   = 5.0f;
 };
 
 struct SimConfig {

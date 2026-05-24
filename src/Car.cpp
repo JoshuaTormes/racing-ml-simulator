@@ -8,12 +8,14 @@ void Car::reset(Vec2 spawnPos, float spawnAngle) {
     angle        = spawnAngle;
     speed        = 0.f;
     fitness      = 0.f;
+    maxProgress  = 0.f;
     idleTime     = 0.f;
     episodeTime  = 0.f;
     done         = false;
     doneReason   = DoneReason::None;
     progState    = ProgressState{};
-    prevProgress_= 0.f;
+    speedSum_    = 0.f;
+    ticks_       = 0;
 }
 
 void Car::applyAction(const Action& a) {
@@ -64,23 +66,28 @@ Observation Car::observe(const Track& track) const {
 float Car::stepDone(const Track& track, const RewardConfig& cfg) {
     if (done) return 0.f;
 
+    float fitnessBefore = fitness;
+
     episodeTime += DT;
+    ++ticks_;
 
     // Update sensors
     sensor.update(pos, angle, track);
 
-    // Update progress
-    float deltaProgress = track.progressAt(pos, progState);
+    // Update progress and high-water mark
+    track.progressAt(pos, progState);
+    if (progState.totalProg > maxProgress) maxProgress = progState.totalProg;
 
-    // Track idle (no speed progress)
+    // Accumulate normalized speed
+    speedSum_ += std::fabs(speed) / MAX_SPEED;
+
+    // Track idle (stall detection)
     if (std::fabs(speed) < cfg.idle_eps) idleTime += DT;
     else idleTime = 0.f;
 
-    // Compute reward for this tick
-    float reward = 0.f;
-    reward += cfg.w_progress * deltaProgress;
-    reward += cfg.w_speed    * (std::fabs(speed) / MAX_SPEED);
-    if (std::fabs(speed) < cfg.idle_eps) reward -= cfg.w_idle;
+    // Recompute fitness from accumulators (no per-tick survival bias)
+    float avgSpeed = speedSum_ / (float)ticks_;
+    fitness = cfg.w_progress * maxProgress + cfg.w_speed * avgSpeed;
 
     // Check done conditions
     int n = (int)track.waypoints().size();
@@ -90,30 +97,25 @@ float Car::stepDone(const Track& track, const RewardConfig& cfg) {
     // Completed circuit
     if (progState.nextWp > totalWps) {
         done = true; doneReason = DoneReason::Completed;
-        reward += cfg.w_finish;
-        fitness += reward;
-        return reward;
+        fitness += cfg.w_finish;
+        return fitness - fitnessBefore;
     }
     // Timeout
     if (episodeTime >= EPISODE_TIMEOUT) {
         done = true; doneReason = DoneReason::Timeout;
-        fitness += reward;
-        return reward;
+        return fitness - fitnessBefore;
     }
     // Stall
     if (idleTime >= STALL_TIMEOUT) {
         done = true; doneReason = DoneReason::Stall;
-        fitness += reward;
-        return reward;
+        return fitness - fitnessBefore;
     }
     // Collision
     if (!track.isInsideTrack(pos)) {
         done = true; doneReason = DoneReason::Collision;
-        reward -= cfg.w_crash;
-        fitness += reward;
-        return reward;
+        fitness -= cfg.w_crash;
+        return fitness - fitnessBefore;
     }
 
-    fitness += reward;
-    return reward;
+    return fitness - fitnessBefore;
 }

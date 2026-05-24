@@ -9,13 +9,14 @@ enum class DoneReason { None, Collision, Timeout, Stall, Completed };
 class Car {
 public:
     // Public state (read by Game/Renderer)
-    Vec2  pos         = {0, 0};
-    float angle       = 0.f;
-    float speed       = 0.f;
-    float fitness     = 0.f;
-    float idleTime    = 0.f;
-    float episodeTime = 0.f;
-    bool  done        = false;
+    Vec2  pos          = {0, 0};
+    float angle        = 0.f;
+    float speed        = 0.f;
+    float fitness      = 0.f;
+    float maxProgress  = 0.f; // high-water mark of progState.totalProg (monotonic)
+    float idleTime     = 0.f;
+    float episodeTime  = 0.f;
+    bool  done         = false;
     DoneReason doneReason = DoneReason::None;
     ProgressState progState;
     Sensor sensor;
@@ -30,5 +31,6 @@ public:
     float stepDone(const Track& track, const RewardConfig& cfg);
 
 private:
-    float prevProgress_ = 0.f;
+    float speedSum_ = 0.f;
+    int   ticks_    = 0;
 };

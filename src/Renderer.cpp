@@ -201,12 +201,12 @@ void Renderer::renderTraining(const TrainingSession& session, bool turbo) {
     const auto& cars = session.game().cars();
     int limit = std::min((int)cars.size(), 200);
 
-    // Find the alive car with the highest fitness to highlight in yellow
+    // Find the alive car furthest ahead on track (monotonic, no flicker)
     int bestIdx = -1;
-    float bestF = -std::numeric_limits<float>::infinity();
+    float bestP = -std::numeric_limits<float>::infinity();
     for (int i = 0; i < limit; ++i) {
-        if (!cars[i].done && cars[i].fitness > bestF) {
-            bestF = cars[i].fitness;
+        if (!cars[i].done && cars[i].maxProgress > bestP) {
+            bestP = cars[i].maxProgress;
             bestIdx = i;
         }
     }
@@ -227,10 +227,16 @@ void Renderer::drawTrainingHUD(const TrainingSession& session, bool turbo) {
     if (!fontLoaded_) return;
 
     const auto& stats = session.lastStats();
+    const auto& cars  = session.game().cars();
+    int total = (int)cars.size();
+    int elim  = (int)std::count_if(cars.begin(), cars.end(), [](const Car& c){ return c.done; });
+    int alive = total - elim;
+
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(2);
     ss << "Gen: " << session.currentGeneration() + 1 << "/" << session.totalGenerations() << "\n";
     ss << "Algo: " << session.algoName() << "\n";
+    ss << "Total: " << total << "  Vivos: " << alive << "  Elim: " << elim << "\n";
     if (stats.generation > 0) {
         ss << "Best: " << stats.bestFitness << "\n";
         ss << "Mean: " << stats.meanFitness << "\n";
