@@ -6,3 +6,7 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 CTestTestfile.cmake
+.claude
+specs
+out/
+*.rnnw
