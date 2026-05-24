@@ -42,6 +42,12 @@ void Game::setControllers(std::vector<std::unique_ptr<AIController>> ctrls) {
     controllers_ = std::move(ctrls);
 }
 
+void Game::loadMap(const std::string& path) {
+    track_ = std::make_unique<Track>(path);
+    cfg_.map = path;
+    spawnCars();
+}
+
 void Game::updateRange(int begin, int end) {
     for (int i = begin; i < end; ++i) {
         Car& car = cars_[i];

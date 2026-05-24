@@ -32,6 +32,11 @@ TrainingSession::TrainingSession(SimConfig sim,
     std::filesystem::create_directories(outDir_);
 }
 
+void TrainingSession::setMap(const std::string& path) {
+    game_.loadMap(path);
+    beginGeneration();
+}
+
 void TrainingSession::beginGeneration() {
     std::vector<std::unique_ptr<AIController>> ctrls;
     ctrls.reserve(trainer_->populationSize());

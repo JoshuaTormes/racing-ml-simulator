@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <filesystem>
 
 using json = nlohmann::json;
 
@@ -21,6 +22,8 @@ Track::Track(const std::string& jsonPath) {
     if (!j.contains("waypoints") || !j.contains("track_width") || !j.contains("closed"))
         throw std::runtime_error("Track: missing required fields (waypoints/track_width/closed)");
 
+    name_       = j.contains("name") ? j["name"].get<std::string>()
+                                      : std::filesystem::path(jsonPath).stem().string();
     closed_     = j["closed"].get<bool>();
     trackWidth_ = j["track_width"].get<float>();
 

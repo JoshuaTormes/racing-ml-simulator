@@ -16,6 +16,12 @@ public:
     // Consume the pending turbo-toggle signal (returns true once, then resets)
     bool consumeToggleTurbo();
 
+    // Consume pending restart click (returns true once, then resets)
+    bool consumeRestart();
+
+    // Consume pending map-cycle delta (-1/0/+1, returns non-zero once, then resets)
+    int consumeMapDelta();
+
     // Draw full scene from game state
     void render(const Game& game, bool showRays = true);
 
@@ -27,8 +33,14 @@ public:
 private:
     sf::RenderWindow window_;
     sf::Font         font_;
-    bool             fontLoaded_ = false;
-    bool             toggleTurbo_ = false;
+    bool             fontLoaded_   = false;
+    bool             toggleTurbo_  = false;
+    bool             restartClicked_ = false;
+    int              mapDelta_      = 0;
+
+    sf::FloatRect prevMapBtn_;
+    sf::FloatRect restartBtn_;
+    sf::FloatRect nextMapBtn_;
 
     void drawTrack(const Track& track);
     void drawCar(const Car& car, sf::Color color);
@@ -36,6 +48,8 @@ private:
     void drawHUD(const Game& game);
     void drawTrainingHUD(const TrainingSession& session, bool turbo);
     void drawFitnessGraph(const std::vector<GenerationStats>& history);
+    void drawButton(const sf::FloatRect& r, const std::string& label);
+    void drawControls(const std::string& mapName);
 
     static sf::Vector2f toSf(Vec2 v) { return {v.x, v.y}; }
 };

@@ -9,6 +9,25 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <filesystem>
+#include <algorithm>
+
+static std::vector<std::string> listMaps(const std::string& dir) {
+    std::vector<std::string> v;
+    std::error_code ec;
+    for (auto& e : std::filesystem::directory_iterator(dir.empty() ? "maps" : dir, ec))
+        if (e.is_regular_file() && e.path().extension() == ".json")
+            v.push_back(e.path().string());
+    std::sort(v.begin(), v.end());
+    return v;
+}
+
+static int findMapIndex(const std::vector<std::string>& maps, const std::string& cur) {
+    auto curName = std::filesystem::path(cur).filename();
+    for (size_t i = 0; i < maps.size(); ++i)
+        if (std::filesystem::path(maps[i]).filename() == curName) return (int)i;
+    return 0;
+}
 
 static void printUsage(const char* argv0) {
     std::cout
@@ -86,25 +105,35 @@ int main(int argc, char* argv[]) {
         }
         Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
         game.reset();
-        using Clock = std::chrono::steady_clock;
-        auto prev = Clock::now();
-        float accumulator = 0.f;
-        while (renderer.isOpen()) {
-            if (!renderer.handleEvents()) break;
-            auto now = Clock::now();
-            float dt = std::chrono::duration<float>(now - prev).count();
-            prev = now;
-            accumulator += dt;
-            while (accumulator >= DT) {
-                game.tick();
-                accumulator -= DT;
-                if (game.episodeDone()) {
-                    game.reset();
-                    accumulator = 0.f;
-                    break;
+        {
+            auto mapDir = std::filesystem::path(wcfg.map).parent_path().string();
+            auto maps = listMaps(mapDir);
+            int idx = findMapIndex(maps, wcfg.map);
+            using Clock = std::chrono::steady_clock;
+            auto prev = Clock::now();
+            float accumulator = 0.f;
+            while (renderer.isOpen()) {
+                if (!renderer.handleEvents()) break;
+                if (renderer.consumeRestart()) { game.reset(); accumulator = 0.f; }
+                if (int d = renderer.consumeMapDelta(); d && !maps.empty()) {
+                    idx = (idx + d + (int)maps.size()) % (int)maps.size();
+                    game.loadMap(maps[idx]); accumulator = 0.f;
                 }
+                auto now = Clock::now();
+                float dt = std::chrono::duration<float>(now - prev).count();
+                prev = now;
+                accumulator += dt;
+                while (accumulator >= DT) {
+                    game.tick();
+                    accumulator -= DT;
+                    if (game.episodeDone()) {
+                        game.reset();
+                        accumulator = 0.f;
+                        break;
+                    }
+                }
+                renderer.render(game, /*showRays=*/true);
             }
-            renderer.render(game, /*showRays=*/true);
         }
 #else
         (void)path;
@@ -137,6 +166,11 @@ int main(int argc, char* argv[]) {
         Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
         bool turbo = false;
 
+        {
+        auto mapDir = std::filesystem::path(cfg.map).parent_path().string();
+        auto maps = listMaps(mapDir);
+        int idx = findMapIndex(maps, cfg.map);
+
         session.beginGeneration();
         using Clock = std::chrono::steady_clock;
         auto prev = Clock::now();
@@ -145,6 +179,11 @@ int main(int argc, char* argv[]) {
         while (renderer.isOpen() && !session.done()) {
             if (!renderer.handleEvents()) break;
             if (renderer.consumeToggleTurbo()) turbo = !turbo;
+            if (renderer.consumeRestart()) { session.beginGeneration(); accumulator = 0.f; prev = Clock::now(); }
+            if (int d = renderer.consumeMapDelta(); d && !maps.empty()) {
+                idx = (idx + d + (int)maps.size()) % (int)maps.size();
+                session.setMap(maps[idx]); accumulator = 0.f; prev = Clock::now();
+            }
 
             if (turbo) {
                 // Run many ticks (up to full generation) per frame
@@ -182,6 +221,7 @@ int main(int argc, char* argv[]) {
             if (!renderer.handleEvents()) break;
             renderer.renderTraining(session, turbo);
         }
+        } // maps scope
 #endif
         return 0;
     }
@@ -210,12 +250,22 @@ int main(int argc, char* argv[]) {
     Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
     game.reset();
 
+    {
+    auto mapDir = std::filesystem::path(cfg.map).parent_path().string();
+    auto maps = listMaps(mapDir);
+    int idx = findMapIndex(maps, cfg.map);
+
     using Clock = std::chrono::steady_clock;
     auto prev = Clock::now();
     float accumulator = 0.f;
 
     while (renderer.isOpen()) {
         if (!renderer.handleEvents()) break;
+        if (renderer.consumeRestart()) { game.reset(); accumulator = 0.f; }
+        if (int d = renderer.consumeMapDelta(); d && !maps.empty()) {
+            idx = (idx + d + (int)maps.size()) % (int)maps.size();
+            game.loadMap(maps[idx]); accumulator = 0.f;
+        }
 
         auto now = Clock::now();
         float dt = std::chrono::duration<float>(now - prev).count();
@@ -234,6 +284,7 @@ int main(int argc, char* argv[]) {
 
         renderer.render(game, /*showRays=*/true);
     }
+    } // maps scope
 #endif
 
     return 0;

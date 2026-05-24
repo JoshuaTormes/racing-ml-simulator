@@ -9,6 +9,9 @@
 
 Renderer::Renderer(unsigned width, unsigned height, const std::string& fontPath)
     : window_(sf::VideoMode({width, height}), "Racing ML Sim")
+    , prevMapBtn_(sf::Vector2f{606.f, 8.f}, sf::Vector2f{90.f, 26.f})
+    , restartBtn_(sf::Vector2f{704.f, 8.f}, sf::Vector2f{90.f, 26.f})
+    , nextMapBtn_(sf::Vector2f{802.f, 8.f}, sf::Vector2f{90.f, 26.f})
 {
     window_.setFramerateLimit(60);
     fontLoaded_ = font_.openFromFile(fontPath);
@@ -24,6 +27,17 @@ bool Renderer::handleEvents() {
             if (kp->code == sf::Keyboard::Key::T)
                 toggleTurbo_ = true;
         }
+        if (const auto* mb = e->getIf<sf::Event::MouseButtonPressed>()) {
+            if (mb->button == sf::Mouse::Button::Left) {
+                sf::Vector2f p((float)mb->position.x, (float)mb->position.y);
+                if (restartBtn_.contains(p))
+                    restartClicked_ = true;
+                else if (prevMapBtn_.contains(p))
+                    mapDelta_ = -1;
+                else if (nextMapBtn_.contains(p))
+                    mapDelta_ = +1;
+            }
+        }
     }
     return window_.isOpen();
 }
@@ -31,6 +45,18 @@ bool Renderer::handleEvents() {
 bool Renderer::consumeToggleTurbo() {
     bool v = toggleTurbo_;
     toggleTurbo_ = false;
+    return v;
+}
+
+bool Renderer::consumeRestart() {
+    bool v = restartClicked_;
+    restartClicked_ = false;
+    return v;
+}
+
+int Renderer::consumeMapDelta() {
+    int v = mapDelta_;
+    mapDelta_ = 0;
     return v;
 }
 
@@ -116,6 +142,40 @@ void Renderer::drawHUD(const Game& game) {
     window_.draw(text);
 }
 
+void Renderer::drawButton(const sf::FloatRect& r, const std::string& label) {
+    sf::RectangleShape rect({r.size.x, r.size.y});
+    rect.setPosition({r.position.x, r.position.y});
+    rect.setFillColor(sf::Color(60, 60, 70));
+    rect.setOutlineColor(sf::Color(160, 160, 160));
+    rect.setOutlineThickness(1.f);
+    window_.draw(rect);
+
+    if (fontLoaded_) {
+        sf::Text text(font_, label, 13);
+        text.setFillColor(sf::Color::White);
+        auto bounds = text.getLocalBounds();
+        float tx = r.position.x + (r.size.x - bounds.size.x) * 0.5f - bounds.position.x;
+        float ty = r.position.y + (r.size.y - bounds.size.y) * 0.5f - bounds.position.y;
+        text.setPosition({tx, ty});
+        window_.draw(text);
+    }
+}
+
+void Renderer::drawControls(const std::string& mapName) {
+    drawButton(prevMapBtn_, "< Mapa");
+    drawButton(restartBtn_, "Restart");
+    drawButton(nextMapBtn_, "Mapa >");
+
+    if (fontLoaded_) {
+        sf::Text lbl(font_, mapName, 13);
+        lbl.setFillColor(sf::Color(200, 200, 200));
+        auto bounds = lbl.getLocalBounds();
+        float x = nextMapBtn_.position.x + nextMapBtn_.size.x - bounds.size.x - bounds.position.x;
+        lbl.setPosition({x, 40.f});
+        window_.draw(lbl);
+    }
+}
+
 void Renderer::render(const Game& game, bool showRays) {
     window_.clear(sf::Color(30, 30, 30));
     drawTrack(game.track());
@@ -130,6 +190,7 @@ void Renderer::render(const Game& game, bool showRays) {
         if (showRays && i == 0) drawRays(cars[i]);
     }
     drawHUD(game);
+    drawControls(game.track().name());
     window_.display();
 }
 
@@ -158,6 +219,7 @@ void Renderer::renderTraining(const TrainingSession& session, bool turbo) {
 
     drawTrainingHUD(session, turbo);
     drawFitnessGraph(session.history());
+    drawControls(session.game().track().name());
     window_.display();
 }
 

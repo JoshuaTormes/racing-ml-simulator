@@ -1,0 +1,24 @@
+{
+  "name": "map4_obstaculos",
+  "closed": true,
+  "track_width": 130.0,
+  "waypoints": [
+    [250, 160],
+    [550, 150],
+    [720, 260],
+    [770, 420],
+    [620, 560],
+    [330, 560],
+    [150, 420],
+    [160, 260]
+  ],
+  "obstacles": [
+    { "type": "circle", "pos": [400, 200], "radius": 28 },
+    { "type": "circle", "pos": [560, 250], "radius": 28 },
+    { "type": "circle", "pos": [690, 380], "radius": 28 },
+    { "type": "circle", "pos": [560, 500], "radius": 30 },
+    { "type": "circle", "pos": [380, 520], "radius": 28 },
+    { "type": "rect",   "pos": [220, 360], "size": [50, 90] },
+    { "type": "circle", "pos": [300, 300], "radius": 26 }
+  ]
+}

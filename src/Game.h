@@ -36,6 +36,9 @@ public:
     // Set controllers (takes ownership); must match population size
     void setControllers(std::vector<std::unique_ptr<AIController>> ctrls);
 
+    // Replace the active track and respawn all cars (SFML-free)
+    void loadMap(const std::string& path);
+
     const SimConfig& config() const { return cfg_; }
 
 private:

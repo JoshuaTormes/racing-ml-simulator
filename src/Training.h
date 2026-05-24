@@ -19,6 +19,9 @@ public:
     void endGeneration();
     bool done() const;
 
+    // Replace active track and restart current generation (SFML-free)
+    void setMap(const std::string& path);
+
     void runAll();
 
     const Game&  game()             const { return game_; }

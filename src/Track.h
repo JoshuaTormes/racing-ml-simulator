@@ -39,6 +39,7 @@ public:
     const std::vector<Obstacle>& obstacles()  const { return obstacles_; }
     bool                         closed()     const { return closed_; }
     float                        trackWidth() const { return trackWidth_; }
+    const std::string&           name()       const { return name_; }
 
 private:
     std::vector<Vec2>     waypoints_;
@@ -47,6 +48,7 @@ private:
     std::vector<Obstacle> obstacles_;
     bool  closed_      = true;
     float trackWidth_  = 120.f;
+    std::string name_;
 
     void buildBorders();
     // Segment intersection helpers
