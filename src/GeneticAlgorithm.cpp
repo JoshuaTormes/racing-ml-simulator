@@ -12,6 +12,26 @@ float GeneticAlgorithm::lcgFloat(std::uint32_t& s) {
     return (float)(lcg(s) >> 8) / (float)(1u << 24);
 }
 
+void GeneticAlgorithm::seedFrom(const std::vector<float>& champion, size_t n, unsigned seed, float sigma) {
+    seed_        = seed;
+    weightCount_ = champion.size();
+    generation_  = 0;
+    std::uint32_t rng = seed;
+    population_.resize(n);
+    population_[0].weights = champion;
+    population_[0].fitness = 0.f;
+    for (size_t i = 1; i < n; ++i) {
+        population_[i].weights = champion;
+        population_[i].fitness = 0.f;
+        for (auto& w : population_[i].weights) {
+            float u1 = lcgFloat(rng) + 1e-9f;
+            float u2 = lcgFloat(rng);
+            float noise = std::sqrt(-2.f * std::log(u1)) * std::cos(2.f * 3.14159265f * u2);
+            w += sigma * noise;
+        }
+    }
+}
+
 void GeneticAlgorithm::initPopulation(size_t n, size_t weightCount, unsigned seed) {
     seed_        = seed;
     weightCount_ = weightCount;

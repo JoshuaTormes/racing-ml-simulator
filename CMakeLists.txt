@@ -33,6 +33,8 @@ set(SIM_SOURCES
   src/Sensor.cpp
   src/NeuralNetwork.cpp
   src/GeneticAlgorithm.cpp
+  src/Trainers.cpp
+  src/Training.cpp
   src/Game.cpp
   src/Renderer.cpp
   src/HumanController.cpp
@@ -49,6 +51,8 @@ add_executable(racing_tests tests/test_main.cpp
   src/Sensor.cpp
   src/NeuralNetwork.cpp
   src/GeneticAlgorithm.cpp
+  src/Trainers.cpp
+  src/Training.cpp
   src/Game.cpp
 )
 target_include_directories(racing_tests PRIVATE src)

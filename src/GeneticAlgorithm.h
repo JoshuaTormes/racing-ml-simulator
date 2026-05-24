@@ -25,6 +25,9 @@ public:
 
     int generation() const { return generation_; }
 
+    // Seed population from a champion (copies + Gaussian noise); used for --load+--train
+    void seedFrom(const std::vector<float>& champion, size_t n, unsigned seed, float sigma = 0.3f);
+
 private:
     std::vector<Genome> population_;
     int                 generation_ = 0;

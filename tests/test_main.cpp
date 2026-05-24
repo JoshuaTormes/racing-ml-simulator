@@ -14,6 +14,9 @@
 #include "NeuralNetwork.h"
 #include "Game.h"
 #include "GeneticAlgorithm.h"
+#include "Trainers.h"
+#include "Training.h"
+#include <filesystem>
 
 // Lightweight test framework
 static int g_pass = 0, g_fail = 0;
@@ -219,6 +222,127 @@ static void test_genetic_algorithm() {
     ASSERT(ga.genomes().size() == 20);
 }
 
+// ---------- Trainers ----------
+static void test_trainers_weight_count() {
+    const size_t POP = 10, WC = 50;
+    for (const std::string& algo : {"genetic", "random_search", "hillclimb"}) {
+        auto t = makeTrainer(algo);
+        t->init(POP, WC, 42);
+        ASSERT(t->populationSize() == POP);
+        for (size_t i = 0; i < POP; ++i)
+            ASSERT(t->weights(i).size() == WC);
+    }
+}
+
+static void test_trainers_determinism() {
+    const size_t POP = 8, WC = 20;
+    for (const std::string& algo : {"genetic", "random_search", "hillclimb"}) {
+        auto t1 = makeTrainer(algo);
+        auto t2 = makeTrainer(algo);
+        t1->init(POP, WC, 77);
+        t2->init(POP, WC, 77);
+        // Feed same fitness sequence
+        for (size_t i = 0; i < POP; ++i) {
+            float f = (float)i * 1.5f;
+            t1->setFitness(i, f);
+            t2->setFitness(i, f);
+        }
+        t1->evolve();
+        t2->evolve();
+        bool match = true;
+        for (size_t i = 0; i < POP; ++i)
+            for (size_t j = 0; j < WC; ++j)
+                if (std::fabs(t1->weights(i)[j] - t2->weights(i)[j]) > 1e-6f)
+                    match = false;
+        ASSERT(match);
+    }
+}
+
+static void test_trainers_elitism() {
+    // random_search and hillclimb must be non-decreasing in global best fitness
+    for (const std::string& algo : {"random_search", "hillclimb"}) {
+        auto t = makeTrainer(algo);
+        t->init(10, 30, 5);
+        float prevBest = -1e30f;
+        for (int gen = 0; gen < 5; ++gen) {
+            // set increasing fitness for first individual
+            for (size_t i = 0; i < t->populationSize(); ++i)
+                t->setFitness(i, (float)(gen * 10 + (int)i));
+            float curBest = -1e30f;
+            for (size_t i = 0; i < t->populationSize(); ++i)
+                if ((float)(gen * 10 + (int)i) > curBest)
+                    curBest = (float)(gen * 10 + (int)i);
+            ASSERT(curBest >= prevBest);
+            prevBest = curBest;
+            t->evolve();
+        }
+    }
+}
+
+static void test_trainers_resume() {
+    const size_t POP = 8, WC = 20;
+    std::vector<float> champion(WC, 1.0f);
+
+    // HillClimb: pop[0] must equal champion
+    {
+        auto t = makeTrainer("hillclimb");
+        t->initFromWeights(champion, POP, 42);
+        bool eq = true;
+        for (size_t j = 0; j < WC; ++j)
+            if (std::fabs(t->weights(0)[j] - champion[j]) > 1e-6f) eq = false;
+        ASSERT(eq);
+    }
+    // Genetic seedFrom: pop[0] must equal champion
+    {
+        GeneticAlgorithm ga;
+        ga.seedFrom(champion, POP, 42);
+        bool eq = true;
+        for (size_t j = 0; j < WC; ++j)
+            if (std::fabs(ga.genomes()[0].weights[j] - champion[j]) > 1e-6f) eq = false;
+        ASSERT(eq);
+        ASSERT(ga.genomes().size() == POP);
+    }
+    // RandomSearch: pop[0] must equal champion after initFromWeights
+    {
+        auto t = makeTrainer("random_search");
+        t->initFromWeights(champion, POP, 42);
+        bool eq = true;
+        for (size_t j = 0; j < WC; ++j)
+            if (std::fabs(t->weights(0)[j] - champion[j]) > 1e-6f) eq = false;
+        ASSERT(eq);
+    }
+}
+
+static void test_training_session_headless() {
+    SimConfig cfg;
+    cfg.population = 10;
+    cfg.headless   = true;
+    cfg.threads    = 1;
+    cfg.seed       = 42;
+
+    auto outDir = (std::filesystem::temp_directory_path() / "racing_ml_test_out").string();
+    std::filesystem::remove_all(outDir);
+
+    TrainingSession session(cfg, makeTrainer("genetic"), 3, outDir);
+    session.runAll();
+
+    ASSERT(session.done());
+    ASSERT((int)session.history().size() == 3);
+
+    // best.rnnw and gen_0001..0003.rnnw must exist
+    ASSERT(std::filesystem::exists(outDir + "/best.rnnw"));
+    ASSERT(std::filesystem::exists(outDir + "/gen_0001.rnnw"));
+    ASSERT(std::filesystem::exists(outDir + "/gen_0002.rnnw"));
+    ASSERT(std::filesystem::exists(outDir + "/gen_0003.rnnw"));
+
+    // Reload best.rnnw into a NeuralNetwork without throwing
+    NeuralNetwork nn({OBS_SIZE, 8, 2});
+    nn.load(outDir + "/best.rnnw");
+    ASSERT(nn.getWeights().size() == NeuralNetwork({OBS_SIZE, 8, 2}).getWeights().size());
+
+    std::filesystem::remove_all(outDir);
+}
+
 // ---------- Game headless episode terminates ----------
 static void test_game_episode_terminates() {
     SimConfig cfg;
@@ -255,6 +379,21 @@ int main() {
 
     test_genetic_algorithm();
     std::cout << "GeneticAlgorithm: ok\n";
+
+    test_trainers_weight_count();
+    std::cout << "Trainers weight count: ok\n";
+
+    test_trainers_determinism();
+    std::cout << "Trainers determinism: ok\n";
+
+    test_trainers_elitism();
+    std::cout << "Trainers elitism: ok\n";
+
+    test_trainers_resume();
+    std::cout << "Trainers resume: ok\n";
+
+    test_training_session_headless();
+    std::cout << "TrainingSession headless: ok\n";
 
     test_game_episode_terminates();
     std::cout << "Game headless episode: ok\n";
