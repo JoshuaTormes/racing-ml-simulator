@@ -21,7 +21,7 @@ void Car::reset(Vec2 spawnPos, float spawnAngle) {
 void Car::applyAction(const Action& a) {
     // Throttle: positive = accelerate, negative = brake
     float accelForce = (a.throttle > 0.f) ?  a.throttle * ACCEL * DT
-                                           : -a.throttle * BRAKE * DT;
+                                           :  a.throttle * BRAKE * DT;
     // Negative throttle brakes/reverses
     speed += accelForce;
     speed *= DRAG;
