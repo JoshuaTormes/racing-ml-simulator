@@ -60,21 +60,70 @@ A build baixa `nlohmann/json` automaticamente via `FetchContent` na primeira exe
 
 ### Modo janela (padrão)
 
-Abre uma janela 900×700 com a pista e os carros. O **carro 0** (amarelo) é controlado pelo teclado. Os demais têm redes neurais com pesos aleatórios.
+Abre uma janela 900×700. O **carro 0** (amarelo) é controlado pelo teclado; os demais têm redes neurais com pesos aleatórios.
 
 ```bash
 ./build/racing_sim
+./build/racing_sim --population 10   # mais carros com NN aleatória
 ```
 
-Com múltiplos carros (útil para ver os NNs se movendo):
+### Treinamento headless (mais rápido)
+
+Loop geracional sem janela: roda N gerações, imprime stats e salva os pesos.
 
 ```bash
-./build/racing_sim --population 10
+# 100 gerações, 200 carros, algoritmo genético (default)
+./build/racing_sim --train --headless --population 200 --generations 100
+
+# Trocar o algoritmo
+./build/racing_sim --train --headless --algo random_search --population 100 --generations 50
+./build/racing_sim --train --headless --algo hillclimb     --population 100 --generations 50
+
+# Controlar seed e saída
+./build/racing_sim --train --headless --seed 123 --out resultados/
+
+# Retomar a partir de um campeão salvo
+./build/racing_sim --train --headless --load out/best.rnnw --generations 50
 ```
 
-### Modo headless
+Saída no terminal (uma linha por geração):
 
-Roda a simulação sem abrir janela — ideal para treino de IA onde a renderização seria um gargalo.
+```
+gen    1/100  best=  344.69  mean=  -32.75  std= 62.26  done=0/200
+gen    2/100  best=  412.03  mean=   -8.11  std= 71.40  done=0/200
+...
+```
+
+Arquivos gerados em `out/` (ou `--out <dir>`):
+
+| Arquivo | Conteúdo |
+|---|---|
+| `best.rnnw` | Pesos do **campeão global** (sobrescrito quando há novo melhor) |
+| `gen_0001.rnnw` … `gen_NNNN.rnnw` | Snapshot do melhor da geração N |
+
+### Treinamento com janela
+
+Igual ao headless, mas abre a janela para assistir à evolução ao vivo. Mostra HUD geracional e gráfico do melhor fitness por geração.
+
+```bash
+./build/racing_sim --train --population 100 --generations 50
+```
+
+Pressione **`T`** para alternar entre **tempo real** (assiste a corrida a 60 Hz) e **turbo** (avança várias gerações por frame, mostrando só o estado atual + gráfico).
+
+### Assistir uma rede treinada
+
+Carrega um arquivo `.rnnw` e abre a janela com 1 carro dirigindo em loop.
+
+```bash
+./build/racing_sim --watch out/best.rnnw
+# ou equivalente:
+./build/racing_sim --load  out/best.rnnw
+```
+
+### Modo headless sem treino
+
+Roda 1 episódio completo e imprime o tempo.
 
 ```bash
 ./build/racing_sim --headless --population 1000
@@ -82,7 +131,7 @@ Roda a simulação sem abrir janela — ideal para treino de IA onde a renderiza
 
 ### Modo benchmark
 
-Mede o tempo de wall-clock para simular 1 geração completa (todos os carros até `done`) e imprime o resultado. O target de performance é **< 5 segundos** para N=1000 carros × 60s × 60Hz em hardware Apple Silicon.
+Mede throughput de simulação e sai.
 
 ```bash
 ./build/racing_sim --benchmark --population 1000
@@ -92,9 +141,8 @@ Mede o tempo de wall-clock para simular 1 geração completa (todos os carros at
 #   Wall-clock: 0.48s  (~3600000 car-ticks total)
 ```
 
-Comparar single vs multi-thread:
-
 ```bash
+# Comparar single vs multi-thread
 ./build/racing_sim --benchmark --population 1000 --threads 1
 ./build/racing_sim --benchmark --population 1000 --threads 8
 ```
@@ -103,29 +151,40 @@ Comparar single vs multi-thread:
 
 ## Controles (modo janela)
 
-| Tecla | Ação |
-|---|---|
-| `W` / `↑` | Acelerar |
-| `S` / `↓` | Frear / ré |
-| `A` / `←` | Virar à esquerda |
-| `D` / `→` | Virar à direita |
-| Fechar janela | Encerrar |
+| Tecla | Modo | Ação |
+|---|---|---|
+| `W` / `↑` | default | Acelerar |
+| `S` / `↓` | default | Frear / ré |
+| `A` / `←` | default | Virar à esquerda |
+| `D` / `→` | default | Virar à direita |
+| `T` | `--train` | Alternar tempo real ↔ turbo |
+| Fechar janela | todos | Encerrar |
 
-O carro 0 (amarelo) exibe os **raios de sensor** em debug: verde = distância longa, vermelho = perto da borda.
+O carro 0 (amarelo) exibe os **raios de sensor**: verde = distância longa, vermelho = perto da borda.
 
 ---
 
 ## Opções de linha de comando
 
 ```
---headless            Roda sem janela
---map <path>          Caminho do JSON do mapa (default: maps/map1.json)
---population <N>      Número de carros simultâneos (default: 1)
---seed <S>            Seed do RNG — garante reprodutibilidade (default: 42)
---benchmark           Mede throughput e sai
---threads <K>         Threads para atualização dos carros (default: hardware_concurrency)
---help / -h           Exibe ajuda
+--headless              Roda sem janela
+--map <path>            Caminho do JSON do mapa (default: maps/map1.json)
+--population <N>        Número de carros simultâneos (default: 1)
+--seed <S>              Seed do RNG — garante reprodutibilidade (default: 42)
+--threads <K>           Threads para atualização dos carros (default: hardware_concurrency)
+--benchmark             Mede throughput e sai
+
+--train                 Ativa o loop geracional de treinamento
+--algo <nome>           Algoritmo: genetic | random_search | hillclimb (default: genetic)
+--generations <N>       Número de gerações (default: 100)
+--out <dir>             Diretório de saída dos pesos (default: out/)
+--load <arquivo.rnnw>   Com --train: semeia população do campeão. Sem --train: abre modo watch
+--watch <arquivo.rnnw>  Abre janela com a rede salva dirigindo (sem treino)
+
+--help / -h             Exibe ajuda
 ```
+
+**Precedência de modo:** `--benchmark` > `--watch` > `--train` > `--load` (sem train = watch) > modo janela padrão.
 
 ---
 
@@ -150,9 +209,14 @@ NeuralNetwork: ok
 Determinism (single-thread): ok
 Determinism (multi-thread): ok
 GeneticAlgorithm: ok
+Trainers weight count: ok
+Trainers determinism: ok
+Trainers elitism: ok
+Trainers resume: ok
+TrainingSession headless: ok
 Game headless episode: ok
 
-Results: 79 passed, 0 failed
+Results: 136 passed, 0 failed
 ```
 
 ### O que os testes cobrem
@@ -166,6 +230,11 @@ Results: 79 passed, 0 failed
 | Determinismo (single) | duas instâncias com mesma seed → trajetória idêntica bit-a-bit |
 | Determinismo (multi) | 100 carros, 300 ticks, single vs multi-thread → fitness por carro idêntico |
 | GeneticAlgorithm | initPopulation, setFitness, evolve incrementa geração |
+| Trainers weight count | `weights(i).size() == weightCount` para todos os algoritmos e indivíduos |
+| Trainers determinism | dois trainers com mesma seed + mesma sequência de fitness → população idêntica após evolve |
+| Trainers elitism | `random_search` e `hillclimb` mantêm best fitness global não-decrescente |
+| Trainers resume | `initFromWeights` preserva o campeão em `weights(0)` |
+| TrainingSession headless | run de 3 gerações gera `best.rnnw` + `gen_000N.rnnw` recarregáveis |
 | Headless episode | episódio termina e `episodeDone()` retorna `true` |
 
 ---
@@ -259,7 +328,52 @@ int main() {
 }
 ```
 
-### Opção 2 — Neuroevolução com NeuralNetwork + GeneticAlgorithm
+### Opção 2 — Neuroevolução via CLI (recomendado)
+
+Use diretamente a linha de comando — não precisa escrever código:
+
+```bash
+# Treino headless, 100 gerações, 200 carros, GA
+./build/racing_sim --train --headless --population 200 --generations 100 --out out/
+
+# Assistir o campeão depois
+./build/racing_sim --watch out/best.rnnw
+
+# Continuar o treino a partir do campeão
+./build/racing_sim --train --headless --load out/best.rnnw --generations 50
+```
+
+### Opção 3 — Neuroevolução programática (TrainingSession)
+
+Para integrar o loop de treino no seu próprio código:
+
+```cpp
+#include "Trainers.h"
+#include "Training.h"
+
+int main() {
+    SimConfig cfg;
+    cfg.population = 200;
+    cfg.headless   = true;
+
+    TrainingSession session(cfg, makeTrainer("genetic"), /*generations=*/100, "out/");
+    session.runAll(); // imprime stats por geração e salva best.rnnw + gen_NNNN.rnnw
+
+    // Inspecionar resultado
+    const auto& stats = session.lastStats();
+    std::cout << "Melhor fitness final: " << stats.bestFitness << "\n";
+}
+```
+
+Ou controlar tick a tick (para interlaçar com render):
+
+```cpp
+session.beginGeneration();
+while (!session.generationComplete()) session.tick();
+session.endGeneration(); // coleta fitness, salva, evolve
+```
+
+### Opção 4 — Neuroevolução manual (GeneticAlgorithm direto)
 
 ```cpp
 #include "Game.h"
@@ -267,58 +381,60 @@ int main() {
 #include "GeneticAlgorithm.h"
 
 int main() {
-    const int    POP  = 200;
-    const int    GENS = 100;
+    const int POP = 200, GENS = 100;
+    SimConfig cfg; cfg.population = POP; cfg.headless = true;
 
-    SimConfig cfg;
-    cfg.population = POP;
-    cfg.headless   = true;
-    cfg.threads    = 0; // hardware_concurrency
-
-    // Descobre quantos pesos a NN padrão tem
     NeuralNetwork refNet({OBS_SIZE, 8, 2}, 0);
-    size_t wCount = refNet.getWeights().size();
-
     GeneticAlgorithm ga;
-    ga.initPopulation(POP, wCount, /*seed=*/42);
+    ga.initPopulation(POP, refNet.getWeights().size(), 42);
 
     for (int gen = 0; gen < GENS; ++gen) {
-        // Monta os controladores com os pesos da geração atual
         std::vector<std::unique_ptr<AIController>> ctrls;
         for (int i = 0; i < POP; ++i) {
-            NeuralNetwork nn({OBS_SIZE, 8, 2}, (unsigned)i);
+            NeuralNetwork nn({OBS_SIZE, 8, 2});
             nn.setWeights(ga.genomes()[i].weights);
             ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
         }
-
         Game game(cfg);
         game.setControllers(std::move(ctrls));
-        game.runHeadlessEpisode(); // roda a geração inteira
+        game.runHeadlessEpisode();
 
-        // Coleta fitness e repassa ao GA
         auto fits = game.fitnesses();
-        for (int i = 0; i < POP; ++i)
-            ga.setFitness(i, fits[i]);
-
-        std::cout << "Gen " << gen << "  best=" << *std::max_element(fits.begin(), fits.end()) << "\n";
-
-        ga.evolve(); // seleção + crossover + mutação → nova geração
+        for (int i = 0; i < POP; ++i) ga.setFitness(i, fits[i]);
+        ga.evolve();
     }
 }
 ```
 
-### Opção 3 — Algoritmo completamente customizado
+### Opção 5 — Algoritmo completamente customizado
 
-Basta implementar `AIController::decide`:
+Implemente a interface `Trainer` para usar seu próprio algoritmo com o loop geracional existente:
 
 ```cpp
-class MeuNEAT : public AIController {
+#include "Trainer.h"
+
+class MeuCMAES : public Trainer {
 public:
-    Action decide(const Observation& obs) override { /* ... */ }
+    void init(size_t popSize, size_t weightCount, unsigned seed) override { /* ... */ }
+    void initFromWeights(const std::vector<float>& champion, size_t popSize, unsigned seed) override { /* ... */ }
+    size_t populationSize() const override { return pop_.size(); }
+    const std::vector<float>& weights(size_t i) const override { return pop_[i]; }
+    void setFitness(size_t i, float f) override { fitness_[i] = f; }
+    void evolve() override { /* CMA-ES update */ }
+    int  generation() const override { return gen_; }
+    const char* name() const override { return "cmaes"; }
+private:
+    std::vector<std::vector<float>> pop_;
+    std::vector<float> fitness_;
+    int gen_ = 0;
 };
+
+// Usar com TrainingSession
+TrainingSession session(cfg, std::make_unique<MeuCMAES>(), 100, "out/");
+session.runAll();
 ```
 
-E injetar via `game.setControllers(...)`. O `Game` não sabe nem liga para o que está dentro do controlador.
+Ou, para algo ainda mais simples, basta implementar `AIController::decide` e injetar via `game.setControllers(...)`. O `Game` não sabe nem liga para o que está dentro do controlador.
 
 ---
 
@@ -374,12 +490,15 @@ racing-ml-sim/
 │   ├── Track.h / .cpp      # Pista: JSON, bordas, raycast, progresso
 │   ├── Sensor.h / .cpp     # 7 raios normalizados em leque de 180°
 │   ├── Car.h / .cpp        # Física, observação, reward, condições de done
-│   ├── NeuralNetwork.h/.cpp# MLP feedforward + serialização binária + NNController
-│   ├── GeneticAlgorithm.h/.cpp # GA: init, evolve, crossover, mutação
+│   ├── NeuralNetwork.h/.cpp# MLP feedforward + serialização binária RNNW + NNController
+│   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutação
+│   ├── Trainer.h           # Interface Trainer + struct GenerationStats (sem SFML)
+│   ├── Trainers.h / .cpp   # GeneticTrainer, RandomSearchTrainer, HillClimbTrainer + makeTrainer()
+│   ├── Training.h / .cpp   # TrainingSession: loop geracional, stats, save/load (sem SFML)
 │   ├── Game.h / .cpp       # reset/step (RL), tick batch, thread pool
-│   ├── Renderer.h / .cpp   # ÚNICA camada SFML: pista, carros, raios, HUD
+│   ├── Renderer.h / .cpp   # ÚNICA camada SFML: pista, carros, HUD, gráfico fitness
 │   ├── HumanController.h/.cpp  # Leitura de teclado → Action (depende de SFML)
-│   └── main.cpp            # Parse de args, dispatch para os modos
+│   └── main.cpp            # Parse de args, dispatch para todos os modos
 └── tests/
-    └── test_main.cpp       # 79 testes: Vec2, geometria, NN, determinismo, GA
+    └── test_main.cpp       # 136 testes: Vec2, geometria, NN, determinismo, GA, Trainers, TrainingSession
 ```
