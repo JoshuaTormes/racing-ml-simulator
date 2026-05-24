@@ -139,9 +139,20 @@ void Renderer::renderTraining(const TrainingSession& session, bool turbo) {
 
     const auto& cars = session.game().cars();
     int limit = std::min((int)cars.size(), 200);
+
+    // Find the alive car with the highest fitness to highlight in yellow
+    int bestIdx = -1;
+    float bestF = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < limit; ++i) {
+        if (!cars[i].done && cars[i].fitness > bestF) {
+            bestF = cars[i].fitness;
+            bestIdx = i;
+        }
+    }
+
     for (int i = 0; i < limit; ++i) {
         if (cars[i].done) continue;
-        sf::Color col = (i == 0) ? sf::Color::Yellow : sf::Color(100, 200, 100, 180);
+        sf::Color col = (i == bestIdx) ? sf::Color::Yellow : sf::Color(100, 200, 100, 180);
         drawCar(cars[i], col);
     }
 
