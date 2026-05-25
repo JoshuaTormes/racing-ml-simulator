@@ -22,8 +22,9 @@ public:
     float speedBonus      = 0.f;  // accumulated bonus for maintaining speed while making progress (task F)
     float checkpointBonus = 0.f;  // one-shot bonus per curved waypoint passed (task G)
     int   lastNextWp      = 1;    // tracks nextWp to detect waypoint passage
-    float noProgressTime  = 0.f;  // seconds since maxProgress last increased (task D stall)
-    float lowSpeedTime    = 0.f;  // seconds below STALL_SPEED threshold
+    float noProgressTime      = 0.f;  // seconds since last meaningful progress (task D stall)
+    float progressAtLastReset = 0.f;  // maxProgress value at last noProgressTime reset
+    float lowSpeedTime        = 0.f;  // seconds below STALL_SPEED threshold
     bool  done            = false;
     DoneReason doneReason = DoneReason::None;
     ProgressState progState;

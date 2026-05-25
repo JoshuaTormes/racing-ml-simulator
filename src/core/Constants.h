@@ -14,8 +14,9 @@ constexpr float DRAG            = 0.98f;
 constexpr float MAX_STEER       = 3.0f;
 constexpr float MAX_LAT_ACCEL   = 650.f;  // grip limit (px/s²): yawRate ≤ MAX_LAT_ACCEL/v
 constexpr float EPISODE_TIMEOUT = 60.f;
-constexpr float STALL_TIMEOUT   = 2.f;
-constexpr float STALL_SPEED     = 4.f;   // px/s — below this counts as stopped
+constexpr float STALL_TIMEOUT      = 2.f;
+constexpr float STALL_SPEED        = 4.f;    // px/s — below this counts as stopped
+constexpr float STALL_PROGRESS_MIN = 0.05f;  // min waypoint advance to reset stall timer (blocks spin-in-place)
 // inputs: rays[0..NUM_RAYS-1], speed, angle_to_wp, dist_to_wp, angle_to_wp2,
 //         then 5x (curvature_Nahead, speed_excess_Nahead) for N=1..5
 constexpr int   OBS_SIZE        = NUM_RAYS + 14; // 21

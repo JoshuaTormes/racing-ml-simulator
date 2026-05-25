@@ -17,8 +17,9 @@ void Car::reset(Vec2 spawnPos, float spawnAngle) {
     speedBonus      = 0.f;
     checkpointBonus = 0.f;
     lastNextWp      = 1;
-    noProgressTime  = 0.f;
-    lowSpeedTime    = 0.f;
+    noProgressTime      = 0.f;
+    progressAtLastReset = 0.f;
+    lowSpeedTime        = 0.f;
     done            = false;
     doneReason      = DoneReason::None;
     progState       = ProgressState{};
@@ -125,9 +126,13 @@ float Car::stepDone(const Track& track, const RewardConfig& cfg) {
 
     // Update progress and high-water mark
     track.progressAt(pos, progState);
-    if (progState.totalProg > maxProgress) {
-        maxProgress     = progState.totalProg;
-        noProgressTime  = 0.f;
+    if (progState.totalProg > maxProgress)
+        maxProgress = progState.totalProg;
+
+    // Reset stall timer only on meaningful advance (blocks spin-in-place oscillation)
+    if (maxProgress >= progressAtLastReset + STALL_PROGRESS_MIN) {
+        progressAtLastReset = maxProgress;
+        noProgressTime      = 0.f;
     } else {
         noProgressTime += DT;
     }
