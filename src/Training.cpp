@@ -85,9 +85,16 @@ void TrainingSession::endGeneration() {
     }
     stats.stdFitness = (n > 0) ? std::sqrt(var / (float)n) : 0.f;
 
-    // Count completed cars
-    for (const auto& car : game_.cars())
-        if (car.doneReason == DoneReason::Completed) ++stats.completed;
+    // Count done reasons
+    for (const auto& car : game_.cars()) {
+        switch (car.doneReason) {
+            case DoneReason::Completed: ++stats.completed;  break;
+            case DoneReason::Collision: ++stats.nCollision; break;
+            case DoneReason::Stall:     ++stats.nStall;     break;
+            case DoneReason::Timeout:   ++stats.nTimeout;   break;
+            default: break;
+        }
+    }
 
     // Save generation snapshot
     {
@@ -134,5 +141,8 @@ void TrainingSession::printStats(const GenerationStats& s) const {
               << "  mean=" << std::setw(8) << s.meanFitness
               << "  std="  << std::setw(6) << s.stdFitness
               << "  done=" << s.completed << "/" << s.population
+              << "  [col=" << s.nCollision
+              << " stall=" << s.nStall
+              << " timeout=" << s.nTimeout << "]"
               << "\n";
 }

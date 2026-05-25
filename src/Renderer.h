@@ -55,6 +55,7 @@ private:
     void drawFitnessGraph(const std::vector<GenerationStats>& history);
     void drawButton(const sf::FloatRect& r, const std::string& label);
     void drawControls(const std::string& mapName);
+    void drawCarDebugHUD(const Car& car);
     void drawSpeedField();
     void commitSpeed();
 

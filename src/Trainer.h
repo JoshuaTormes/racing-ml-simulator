@@ -9,6 +9,10 @@ struct GenerationStats {
     float stdFitness  = 0.f;
     int   completed   = 0;
     int   population  = 0;
+    // Done reason breakdown
+    int   nCollision  = 0;
+    int   nStall      = 0;
+    int   nTimeout    = 0;
 };
 
 class Trainer {

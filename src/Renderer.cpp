@@ -323,6 +323,7 @@ void Renderer::renderTraining(const TrainingSession& session) {
     }
 
     drawTrainingHUD(session);
+    if (bestIdx >= 0) drawCarDebugHUD(cars[bestIdx]);
     drawFitnessGraph(session.history());
     drawControls(session.game().track().name());
     drawSpeedField();
@@ -353,6 +354,25 @@ void Renderer::drawTrainingHUD(const TrainingSession& session) {
     sf::Text text(font_, ss.str(), 16);
     text.setFillColor(sf::Color::White);
     text.setPosition({8.f, 8.f});
+    window_.draw(text);
+}
+
+void Renderer::drawCarDebugHUD(const Car& car) {
+    if (!fontLoaded_) return;
+
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(1);
+    ss << "spd: "       << std::fabs(car.speed) << " px/s\n";
+    ss << "wp: "        << car.progState.nextWp << "\n";
+    ss << "noProgress: "<< car.noProgressTime   << "s\n";
+    ss << "lowSpd: "    << car.lowSpeedTime      << "s\n";
+    ss << "fitness: "   << car.fitness;
+
+    sf::Text text(font_, ss.str(), 13);
+    text.setFillColor(sf::Color(255, 220, 80));
+    // Position near bottom-left, above the fitness graph area
+    auto sz = window_.getSize();
+    text.setPosition({10.f, (float)sz.y - 170.f});
     window_.draw(text);
 }
 
