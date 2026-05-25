@@ -80,33 +80,35 @@ Observation Car::observe(const Track& track) const {
     while (relAngle2 < -(float)M_PI) relAngle2 += 2.f * (float)M_PI;
     obs[NUM_RAYS + 3] = relAngle2 / (float)M_PI;
 
-    int next3Idx = track.closed() ? (progState.nextWp + 2) % n
-                                  : std::min(progState.nextWp + 2, n - 1);
+    // Pre-compute up to 6 sequential waypoint indices for 5-WP lookahead
+    auto wpIdx = [&](int offset) -> int {
+        return track.closed() ? (progState.nextWp + offset) % n
+                              : std::min(progState.nextWp + offset, n - 1);
+    };
+    int i0 = curIdx, i1 = nextIdx, i2 = next2Idx;
+    int i3 = wpIdx(2), i4 = wpIdx(3), i5 = wpIdx(4);
 
-    // Helper: compute signed curvature and speed_excess for a segment pair
+    // Helper: signed curvature (normalized) and speed_excess for a segment pair a→b→c
     auto curvAndExcess = [&](int a, int b, int c) -> std::pair<float,float> {
         Vec2  s1  = track.waypoints()[b] - track.waypoints()[a];
         Vec2  s2  = track.waypoints()[c] - track.waypoints()[b];
         float cr  = s1.x * s2.y - s1.y * s2.x;
         float dt  = s1.x * s2.x + s1.y * s2.y;
         float ang = std::atan2(cr, dt);
-        float curv_rad = std::fabs(ang);
         float seg_len  = std::sqrt(s2.x * s2.x + s2.y * s2.y);
-        float radius   = (curv_rad > 0.01f) ? seg_len / curv_rad : 9999.f;
+        float radius   = (std::fabs(ang) > 0.01f) ? seg_len / std::fabs(ang) : 9999.f;
         float safe_v   = std::min(std::sqrt(MAX_LAT_ACCEL * radius), MAX_SPEED);
         float excess   = std::max(-1.f, std::min(1.f, (std::fabs(speed) - safe_v) / MAX_SPEED));
         return { ang / (float)M_PI, excess };
     };
 
-    // 1-waypoint lookahead: curvature and speed_excess at next corner
-    auto [curv1, excess1] = curvAndExcess(curIdx, nextIdx, next2Idx);
-    obs[NUM_RAYS + 4] = curv1;
-    obs[NUM_RAYS + 5] = excess1;
-
-    // 2-waypoint lookahead: curvature and speed_excess two corners ahead
-    auto [curv2, excess2] = curvAndExcess(nextIdx, next2Idx, next3Idx);
-    obs[NUM_RAYS + 6] = curv2;
-    obs[NUM_RAYS + 7] = excess2;
+    // Lookaheads 1-5: each pair = (signed curvature, speed_excess)
+    auto [c1, e1] = curvAndExcess(i0, i1, i2);  obs[NUM_RAYS+4]=c1; obs[NUM_RAYS+5]=e1;
+    auto [c2, e2] = curvAndExcess(i1, i2, i3);  obs[NUM_RAYS+6]=c2; obs[NUM_RAYS+7]=e2;
+    auto [c3, e3] = curvAndExcess(i2, i3, i4);  obs[NUM_RAYS+8]=c3; obs[NUM_RAYS+9]=e3;
+    auto [c4, e4] = curvAndExcess(i3, i4, i5);  obs[NUM_RAYS+10]=c4; obs[NUM_RAYS+11]=e4;
+    // 5th lookahead reuses last available index when near track end
+    auto [c5, e5] = curvAndExcess(i4, i5, wpIdx(5)); obs[NUM_RAYS+12]=c5; obs[NUM_RAYS+13]=e5;
 
     return obs;
 }
