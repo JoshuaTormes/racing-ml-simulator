@@ -60,22 +60,52 @@ Track::Track(const std::string& jsonPath) {
 
 void Track::buildBorders() {
     int n = (int)waypoints_.size();
+    leftBorder_.clear();
+    rightBorder_.clear();
     leftBorder_.reserve(n + (closed_ ? 1 : 0));
     rightBorder_.reserve(n + (closed_ ? 1 : 0));
     float hw = trackWidth_ * 0.5f;
+    // Miter limit: prevents border spikes/crossings at sharp turns.
+    // At a 90° turn the miter is ~1.41×hw; cap at 3× to handle hairpins gracefully.
+    const float miterLimit = 3.0f;
 
     for (int i = 0; i < n; ++i) {
-        // Direction at this waypoint: average of incoming and outgoing segment directions
-        Vec2 prev = waypoints_[(i - 1 + n) % n];
-        Vec2 next = waypoints_[(i + 1) % n];
-        Vec2 dir;
-        if (!closed_ && i == 0)     dir = (waypoints_[1] - waypoints_[0]).normalized();
-        else if (!closed_ && i == n-1) dir = (waypoints_[n-1] - waypoints_[n-2]).normalized();
-        else dir = (next - prev).normalized();
+        Vec2 d1, d2;
+        if (!closed_ && i == 0) {
+            d1 = d2 = (waypoints_[1] - waypoints_[0]).normalized();
+        } else if (!closed_ && i == n - 1) {
+            d1 = d2 = (waypoints_[n-1] - waypoints_[n-2]).normalized();
+        } else {
+            d1 = (waypoints_[i] - waypoints_[(i - 1 + n) % n]).normalized();
+            d2 = (waypoints_[(i + 1) % n] - waypoints_[i]).normalized();
+        }
 
-        Vec2 perp = dir.perpendicular(); // left (upward) normal in y-down coords
-        leftBorder_.push_back( waypoints_[i] + perp * hw);
-        rightBorder_.push_back(waypoints_[i] - perp * hw);
+        // Left normals of each incident segment
+        Vec2 n1 = d1.perpendicular();
+        Vec2 n2 = d2.perpendicular();
+
+        // Miter bisector: direction that preserves hw distance on both sides
+        Vec2 miter = n1 + n2;
+        float miterLen2 = miter.lengthSq();
+
+        Vec2 offset;
+        if (miterLen2 < 1e-6f) {
+            // ~180° turn: normals cancel (hairpin). Fall back to outgoing normal.
+            offset = n2 * hw;
+        } else {
+            miter = miter * (1.0f / std::sqrt(miterLen2));
+            float dotVal = miter.dot(n1);
+            if (dotVal < 1e-4f) {
+                // Turn so sharp the miter flips sign — use outgoing normal
+                offset = n2 * hw;
+            } else {
+                float scale = std::min(hw / dotVal, hw * miterLimit);
+                offset = miter * scale;
+            }
+        }
+
+        leftBorder_.push_back( waypoints_[i] + offset);
+        rightBorder_.push_back(waypoints_[i] - offset);
     }
 
     if (closed_) {
@@ -151,22 +181,25 @@ bool Track::pointNearSegment(Vec2 p, Vec2 a, Vec2 b, float halfWidth) {
     return (p - closest).length() < halfWidth;
 }
 
-static bool inConvexQuad(Vec2 p, Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
+static bool inTriangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
     auto cross2d = [](Vec2 u, Vec2 v) { return u.x * v.y - u.y * v.x; };
     float d0 = cross2d(b - a, p - a);
     float d1 = cross2d(c - b, p - b);
-    float d2 = cross2d(d - c, p - c);
-    float d3 = cross2d(a - d, p - d);
-    bool allPos = (d0 >= 0) && (d1 >= 0) && (d2 >= 0) && (d3 >= 0);
-    bool allNeg = (d0 <= 0) && (d1 <= 0) && (d2 <= 0) && (d3 <= 0);
+    float d2 = cross2d(a - c, p - c);
+    bool allPos = (d0 >= 0) && (d1 >= 0) && (d2 >= 0);
+    bool allNeg = (d0 <= 0) && (d1 <= 0) && (d2 <= 0);
     return allPos || allNeg;
 }
 
 bool Track::isInsideTrack(Vec2 p) const {
+    // Each track segment is a quad [L0, L1, R1, R0].
+    // Decompose into 2 triangles — triangles are always convex, so this
+    // handles non-convex quads (sharp curves) with zero gaps or false positives.
     int segs = (int)leftBorder_.size() - 1;
     for (int i = 0; i < segs; ++i) {
-        if (inConvexQuad(p, leftBorder_[i], leftBorder_[i+1],
-                            rightBorder_[i+1], rightBorder_[i]))
+        Vec2 L0 = leftBorder_[i],  L1 = leftBorder_[i+1];
+        Vec2 R0 = rightBorder_[i], R1 = rightBorder_[i+1];
+        if (inTriangle(p, L0, L1, R0) || inTriangle(p, L1, R1, R0))
             return true;
     }
     return false;
