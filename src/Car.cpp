@@ -87,6 +87,19 @@ Observation Car::observe(const Track& track) const {
     float dot   = seg1.x * seg2.x + seg1.y * seg2.y;
     obs[NUM_RAYS + 4] = std::atan2(cross, dot) / (float)M_PI;
 
+    // speed_excess: how much faster than the physically safe speed for upcoming curvature.
+    // Positive = too fast, should brake. Negative = already slow enough, can accelerate.
+    // Formula: safe_v = sqrt(MAX_LAT_ACCEL * R), R = seg_len / curv_rad
+    {
+        float curv_rad = std::fabs(std::atan2(cross, dot));
+        float seg_len  = std::sqrt(seg2.x * seg2.x + seg2.y * seg2.y);
+        float radius   = (curv_rad > 0.01f) ? seg_len / curv_rad : 9999.f;
+        float safe_v   = std::sqrt(MAX_LAT_ACCEL * radius);
+        safe_v = std::min(safe_v, MAX_SPEED);
+        float excess = (std::fabs(speed) - safe_v) / MAX_SPEED;
+        obs[NUM_RAYS + 5] = std::max(-1.f, std::min(1.f, excess));
+    }
+
     return obs;
 }
 
