@@ -60,9 +60,9 @@ Genome GeneticAlgorithm::crossover(const Genome& a, const Genome& b, std::uint32
     Genome child;
     size_t n = a.weights.size();
     child.weights.resize(n);
-    size_t point = lcg(rng) % n;
+    // Uniform crossover: each weight independently inherited from A or B
     for (size_t i = 0; i < n; ++i)
-        child.weights[i] = (i < point) ? a.weights[i] : b.weights[i];
+        child.weights[i] = (lcg(rng) & 1u) ? a.weights[i] : b.weights[i];
     return child;
 }
 
@@ -95,12 +95,23 @@ void GeneticAlgorithm::evolve() {
     for (size_t i = 0; i < eliteCount; ++i)
         next.push_back(population_[indices[i]]);
 
+    // Random immigrants: 5% of population replaced with fresh random genomes
+    size_t immigrantCount = std::max<size_t>(1, n / 20);
+
     // Fill rest via crossover + mutation
     while (next.size() < n) {
-        size_t pA = tournamentSelect(rng);
-        size_t pB = tournamentSelect(rng);
-        Genome child = crossover(population_[pA], population_[pB], rng);
-        mutate(child, 0.1f, 0.3f, rng); // 10% mutation rate, sigma=0.3
+        Genome child;
+        if (next.size() >= n - immigrantCount) {
+            // Immigrant: completely random weights in [-1, 1]
+            child.weights.resize(weightCount_);
+            for (auto& w : child.weights)
+                w = lcgFloat(rng) * 2.f - 1.f;
+        } else {
+            size_t pA = tournamentSelect(rng);
+            size_t pB = tournamentSelect(rng);
+            child = crossover(population_[pA], population_[pB], rng);
+            mutate(child, 0.2f, 0.5f, rng); // 20% rate, sigma=0.5
+        }
         child.fitness = 0.f;
         next.push_back(std::move(child));
     }

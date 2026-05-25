@@ -35,9 +35,9 @@ private:
     size_t              weightCount_= 0;
 
     // Tournament selection: returns index of winner from k random candidates
-    size_t tournamentSelect(std::uint32_t& rng, size_t k = 3);
+    size_t tournamentSelect(std::uint32_t& rng, size_t k = 2);
 
-    // Single-point crossover of two weight vectors
+    // Uniform crossover: each weight independently taken from parent A or B
     static Genome crossover(const Genome& a, const Genome& b, std::uint32_t& rng);
 
     // Gaussian mutation: each weight mutated with probability rate
