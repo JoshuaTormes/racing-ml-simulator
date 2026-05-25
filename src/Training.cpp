@@ -21,7 +21,7 @@ TrainingSession::TrainingSession(SimConfig sim,
     , outDir_(std::move(outDir))
     , bestGlobalF_(-std::numeric_limits<float>::infinity())
 {
-    NeuralNetwork probe({OBS_SIZE, 8, 2});
+    NeuralNetwork probe(defaultTopology());
     size_t weightCount = probe.getWeights().size();
 
     if (resumeChampion)
@@ -41,7 +41,7 @@ void TrainingSession::beginGeneration() {
     std::vector<std::unique_ptr<AIController>> ctrls;
     ctrls.reserve(trainer_->populationSize());
     for (size_t i = 0; i < trainer_->populationSize(); ++i) {
-        NeuralNetwork nn({OBS_SIZE, 8, 2});
+        NeuralNetwork nn(defaultTopology());
         nn.setWeights(trainer_->weights(i));
         ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
     }
@@ -93,7 +93,7 @@ void TrainingSession::endGeneration() {
     {
         std::ostringstream fname;
         fname << outDir_ << "/gen_" << std::setw(4) << std::setfill('0') << stats.generation << ".rnnw";
-        NeuralNetwork nn({OBS_SIZE, 8, 2});
+        NeuralNetwork nn(defaultTopology());
         nn.setWeights(trainer_->weights(bestIdx));
         nn.save(fname.str());
     }
@@ -101,7 +101,7 @@ void TrainingSession::endGeneration() {
     // Update and save global best
     if (best > bestGlobalF_) {
         bestGlobalF_ = best;
-        NeuralNetwork nn({OBS_SIZE, 8, 2});
+        NeuralNetwork nn(defaultTopology());
         nn.setWeights(trainer_->weights(bestIdx));
         nn.save(outDir_ + "/best.rnnw");
     }

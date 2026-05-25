@@ -21,7 +21,7 @@ Game::Game(SimConfig cfg)
     for (int i = 0; i < cfg_.population; ++i) {
         unsigned s = (unsigned)rng();
         controllers_.push_back(
-            std::make_unique<NeuralNetworkController>(NeuralNetwork({OBS_SIZE, 8, 2}, s)));
+            std::make_unique<NeuralNetworkController>(NeuralNetwork(defaultTopology(), s)));
     }
     spawnCars();
 }

@@ -1,14 +1,16 @@
 #pragma once
 #include "AIController.h"
+#include "core/Constants.h"
 #include <vector>
 #include <string>
 #include <cstdint>
 
+inline std::vector<int> defaultTopology() { return {OBS_SIZE, NN_HIDDEN, ACT_SIZE}; }
+
 // Feedforward MLP, no external libs. Activation: tanh everywhere.
-// Default topology: {10, 8, 2} — matches OBS_SIZE input, 2-float action output.
 class NeuralNetwork {
 public:
-    explicit NeuralNetwork(std::vector<int> topology = {10, 8, 2},
+    explicit NeuralNetwork(std::vector<int> topology = defaultTopology(),
                            unsigned seed = 0);
 
     // Forward pass: input vector → output vector (tanh, so output ∈ (-1,1))

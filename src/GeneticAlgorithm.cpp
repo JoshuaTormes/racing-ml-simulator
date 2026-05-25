@@ -46,9 +46,8 @@ void GeneticAlgorithm::initPopulation(size_t n, size_t weightCount, unsigned see
     }
 }
 
-size_t GeneticAlgorithm::tournamentSelect(size_t k) {
+size_t GeneticAlgorithm::tournamentSelect(std::uint32_t& rng, size_t k) {
     if (population_.empty()) throw std::runtime_error("GA: empty population");
-    std::uint32_t rng = seed_ ^ (std::uint32_t)generation_ ^ 0xdeadbeef;
     size_t best = lcg(rng) % population_.size();
     for (size_t i = 1; i < k; ++i) {
         size_t idx = lcg(rng) % population_.size();
@@ -98,8 +97,8 @@ void GeneticAlgorithm::evolve() {
 
     // Fill rest via crossover + mutation
     while (next.size() < n) {
-        size_t pA = tournamentSelect();
-        size_t pB = tournamentSelect();
+        size_t pA = tournamentSelect(rng);
+        size_t pB = tournamentSelect(rng);
         Genome child = crossover(population_[pA], population_[pB], rng);
         mutate(child, 0.1f, 0.3f, rng); // 10% mutation rate, sigma=0.3
         child.fitness = 0.f;

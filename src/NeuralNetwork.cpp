@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <random>
 
-static constexpr uint32_t NN_VERSION = 1;
+static constexpr uint32_t NN_VERSION = 2;
 static const char         NN_MAGIC[4] = {'R','N','N','W'};
 
 NeuralNetwork::NeuralNetwork(std::vector<int> topology, unsigned seed)
