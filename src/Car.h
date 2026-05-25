@@ -20,6 +20,8 @@ public:
     float regressPenalty  = 0.f;  // accumulated penalty for falling behind peak progress (task C)
     float curvePenalty    = 0.f;  // accumulated penalty for high speed through tight corners (task E)
     float speedBonus      = 0.f;  // accumulated bonus for maintaining speed while making progress (task F)
+    float checkpointBonus = 0.f;  // one-shot bonus per curved waypoint passed (task G)
+    int   lastNextWp      = 1;    // tracks nextWp to detect waypoint passage
     float noProgressTime  = 0.f;  // seconds since maxProgress last increased (task D stall)
     float lowSpeedTime    = 0.f;  // seconds below STALL_SPEED threshold
     bool  done            = false;

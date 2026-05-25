@@ -37,6 +37,9 @@ struct RewardConfig {
     // w_speed: bonus per unit of (speed/MAX_SPEED) per second while making forward progress.
     // Incentivizes maintaining speed through straights without rewarding crashing fast. Range: [0, inf). Default: 0.3.
     float w_speed    = 0.3f;
+    // w_checkpoint: one-shot bonus per waypoint passed, scaled by its curvature.
+    // Rewards navigating corners rather than stopping before them. Range: [0, inf). Default: 5.0.
+    float w_checkpoint = 5.0f;
     // w_curve: penalty per unit of |curvature| * speed per second.
     // Directly pressures the GA to brake before tight corners. Range: [0, inf). Default: 0 (disabled).
     float w_curve    = 0.0f;

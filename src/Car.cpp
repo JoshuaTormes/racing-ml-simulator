@@ -15,6 +15,8 @@ void Car::reset(Vec2 spawnPos, float spawnAngle) {
     regressPenalty  = 0.f;
     curvePenalty    = 0.f;
     speedBonus      = 0.f;
+    checkpointBonus = 0.f;
+    lastNextWp      = 1;
     noProgressTime  = 0.f;
     lowSpeedTime    = 0.f;
     done            = false;
@@ -102,9 +104,26 @@ float Car::stepDone(const Track& track, const RewardConfig& cfg) {
     track.progressAt(pos, progState);
     if (progState.totalProg > maxProgress) {
         maxProgress     = progState.totalProg;
-        noProgressTime  = 0.f; // reset stall counter whenever we advance
+        noProgressTime  = 0.f;
     } else {
         noProgressTime += DT;
+    }
+
+    // Bonus G: one-shot reward for passing each curved waypoint
+    if (progState.nextWp > lastNextWp) {
+        int n2 = (int)track.waypoints().size();
+        for (int wp = lastNextWp; wp < progState.nextWp; ++wp) {
+            int prev = (wp - 1 + n2) % n2;
+            int cur  =  wp           % n2;
+            int next = (wp + 1)      % n2;
+            Vec2  s1 = track.waypoints()[cur]  - track.waypoints()[prev];
+            Vec2  s2 = track.waypoints()[next] - track.waypoints()[cur];
+            float cr = s1.x * s2.y - s1.y * s2.x;
+            float dt = s1.x * s2.x + s1.y * s2.y;
+            float curv = std::fabs(std::atan2(cr, dt) / (float)M_PI);
+            checkpointBonus += cfg.w_checkpoint * curv;
+        }
+        lastNextWp = progState.nextWp;
     }
 
     // Penalty B: accumulate for each tick spent moving in reverse
@@ -139,8 +158,8 @@ float Car::stepDone(const Track& track, const RewardConfig& cfg) {
     // Penalty E: high speed through tight corners (disabled by default, w_curve=0)
     curvePenalty += cfg.w_curve * curvatureAhead * std::fabs(speed) * DT;
 
-    // Fitness: progress + speed bonus minus accumulated penalties (overwritten each tick)
-    fitness = cfg.w_progress * maxProgress + speedBonus - reversePenalty - regressPenalty - curvePenalty;
+    // Fitness: progress + bonuses minus accumulated penalties (overwritten each tick)
+    fitness = cfg.w_progress * maxProgress + speedBonus + checkpointBonus - reversePenalty - regressPenalty - curvePenalty;
 
     // Check done conditions
     int n        = (int)track.waypoints().size();
