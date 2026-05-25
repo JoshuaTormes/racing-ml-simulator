@@ -36,7 +36,7 @@ struct RewardConfig {
     float w_regress  = 0.3f;
     // w_speed: bonus per unit of (speed/MAX_SPEED) per second while making forward progress.
     // Incentivizes maintaining speed through straights without rewarding crashing fast. Range: [0, inf). Default: 0.3.
-    float w_speed    = 0.3f;
+    float w_speed    = 0.0f;
     // w_curve: penalty per unit of |curvature| * speed per second.
     // Directly pressures the GA to brake before tight corners. Range: [0, inf). Default: 0 (disabled).
     float w_curve    = 0.0f;
