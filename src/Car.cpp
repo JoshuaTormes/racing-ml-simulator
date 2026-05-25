@@ -80,25 +80,33 @@ Observation Car::observe(const Track& track) const {
     while (relAngle2 < -(float)M_PI) relAngle2 += 2.f * (float)M_PI;
     obs[NUM_RAYS + 3] = relAngle2 / (float)M_PI;
 
-    // signed curvature of the upcoming corner: angle between consecutive segments
-    Vec2  seg1 = track.waypoints()[nextIdx]  - track.waypoints()[curIdx];
-    Vec2  seg2 = track.waypoints()[next2Idx] - track.waypoints()[nextIdx];
-    float cross = seg1.x * seg2.y - seg1.y * seg2.x;
-    float dot   = seg1.x * seg2.x + seg1.y * seg2.y;
-    obs[NUM_RAYS + 4] = std::atan2(cross, dot) / (float)M_PI;
+    int next3Idx = track.closed() ? (progState.nextWp + 2) % n
+                                  : std::min(progState.nextWp + 2, n - 1);
 
-    // speed_excess: how much faster than the physically safe speed for upcoming curvature.
-    // Positive = too fast, should brake. Negative = already slow enough, can accelerate.
-    // Formula: safe_v = sqrt(MAX_LAT_ACCEL * R), R = seg_len / curv_rad
-    {
-        float curv_rad = std::fabs(std::atan2(cross, dot));
-        float seg_len  = std::sqrt(seg2.x * seg2.x + seg2.y * seg2.y);
+    // Helper: compute signed curvature and speed_excess for a segment pair
+    auto curvAndExcess = [&](int a, int b, int c) -> std::pair<float,float> {
+        Vec2  s1  = track.waypoints()[b] - track.waypoints()[a];
+        Vec2  s2  = track.waypoints()[c] - track.waypoints()[b];
+        float cr  = s1.x * s2.y - s1.y * s2.x;
+        float dt  = s1.x * s2.x + s1.y * s2.y;
+        float ang = std::atan2(cr, dt);
+        float curv_rad = std::fabs(ang);
+        float seg_len  = std::sqrt(s2.x * s2.x + s2.y * s2.y);
         float radius   = (curv_rad > 0.01f) ? seg_len / curv_rad : 9999.f;
-        float safe_v   = std::sqrt(MAX_LAT_ACCEL * radius);
-        safe_v = std::min(safe_v, MAX_SPEED);
-        float excess = (std::fabs(speed) - safe_v) / MAX_SPEED;
-        obs[NUM_RAYS + 5] = std::max(-1.f, std::min(1.f, excess));
-    }
+        float safe_v   = std::min(std::sqrt(MAX_LAT_ACCEL * radius), MAX_SPEED);
+        float excess   = std::max(-1.f, std::min(1.f, (std::fabs(speed) - safe_v) / MAX_SPEED));
+        return { ang / (float)M_PI, excess };
+    };
+
+    // 1-waypoint lookahead: curvature and speed_excess at next corner
+    auto [curv1, excess1] = curvAndExcess(curIdx, nextIdx, next2Idx);
+    obs[NUM_RAYS + 4] = curv1;
+    obs[NUM_RAYS + 5] = excess1;
+
+    // 2-waypoint lookahead: curvature and speed_excess two corners ahead
+    auto [curv2, excess2] = curvAndExcess(nextIdx, next2Idx, next3Idx);
+    obs[NUM_RAYS + 6] = curv2;
+    obs[NUM_RAYS + 7] = excess2;
 
     return obs;
 }

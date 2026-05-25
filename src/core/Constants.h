@@ -16,9 +16,10 @@ constexpr float MAX_LAT_ACCEL   = 650.f;  // grip limit (px/s²): yawRate ≤ MA
 constexpr float EPISODE_TIMEOUT = 60.f;
 constexpr float STALL_TIMEOUT   = 2.f;
 constexpr float STALL_SPEED     = 4.f;   // px/s — below this counts as stopped
-// inputs: rays[0..NUM_RAYS-1], speed, angle_to_wp, dist_to_wp, angle_to_wp2, curvature_ahead, speed_excess
-constexpr int   OBS_SIZE        = NUM_RAYS + 6; // 13
-constexpr int   NN_HIDDEN       = 16;
+// inputs: rays[0..NUM_RAYS-1], speed, angle_to_wp, dist_to_wp, angle_to_wp2,
+//         curvature_ahead, speed_excess, curvature_2ahead, speed_excess_2ahead
+constexpr int   OBS_SIZE        = NUM_RAYS + 8; // 15
+constexpr int   NN_HIDDEN       = 32;
 constexpr int   ACT_SIZE        = 2;
 constexpr float CAR_LENGTH      = 20.f;
 constexpr float CAR_WIDTH       = 10.f;
