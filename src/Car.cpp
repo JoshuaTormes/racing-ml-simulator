@@ -33,9 +33,9 @@ void Car::applyAction(const Action& a) {
     speed *= DRAG;
     speed = std::clamp(speed, MAX_REVERSE_SPEED, MAX_SPEED);
 
-    // Geometric limit scaled by speed (weak at low v, full at max v)
-    // Grip limit kicks in at high speed: MAX_LAT_ACCEL/v < yawCmd → must brake before tight turn
-    float yawCmd  = std::fabs(a.steering) * MAX_STEER * (std::fabs(speed) / MAX_SPEED);
+    // Full steering authority at any speed; grip physics limits yaw at high speed naturally.
+    // (Old formula scaled by speed/MAX_SPEED — made cornering physically impossible at safe speeds)
+    float yawCmd  = std::fabs(a.steering) * MAX_STEER;
     float yawGrip = MAX_LAT_ACCEL / std::max(std::fabs(speed), 1.f);
     float yawRate = std::copysign(std::min(yawCmd, yawGrip), a.steering);
     angle += yawRate * DT;
