@@ -116,11 +116,8 @@ float Car::stepDone(const Track& track, const RewardConfig& cfg) {
     if (regress > 0.f)
         regressPenalty += cfg.w_regress * regress * DT;
 
-    // Bonus F: reward maintaining speed while actively making forward progress
-    if (progState.totalProg >= maxProgress)
-        speedBonus += cfg.w_speed * (std::fabs(speed) / MAX_SPEED) * DT;
-
-    // Penalty E: high speed through tight upcoming corners
+    // Compute upcoming curvature (shared by bonus F and penalty E)
+    float curvatureAhead = 0.f;
     {
         int n2       = (int)track.waypoints().size();
         int curIdx   = (progState.nextWp - 1 + n2) % n2;
@@ -129,11 +126,18 @@ float Car::stepDone(const Track& track, const RewardConfig& cfg) {
                                       : std::min(progState.nextWp + 1, n2 - 1);
         Vec2  seg1 = track.waypoints()[nextIdx]  - track.waypoints()[curIdx];
         Vec2  seg2 = track.waypoints()[next2Idx] - track.waypoints()[nextIdx];
-        float cross    = seg1.x * seg2.y - seg1.y * seg2.x;
-        float dot      = seg1.x * seg2.x + seg1.y * seg2.y;
-        float curvature = std::fabs(std::atan2(cross, dot) / (float)M_PI);
-        curvePenalty += cfg.w_curve * curvature * std::fabs(speed) * DT;
+        float cross = seg1.x * seg2.y - seg1.y * seg2.x;
+        float dot   = seg1.x * seg2.x + seg1.y * seg2.y;
+        curvatureAhead = std::fabs(std::atan2(cross, dot) / (float)M_PI);
     }
+
+    // Bonus F: speed bonus only on straights — rewards re-acceleration out of corners
+    // Threshold 0.15 ≈ ~27° turn angle; above that the road is considered curved.
+    if (curvatureAhead < 0.15f && progState.totalProg >= maxProgress)
+        speedBonus += cfg.w_speed * (std::fabs(speed) / MAX_SPEED) * DT;
+
+    // Penalty E: high speed through tight corners (disabled by default, w_curve=0)
+    curvePenalty += cfg.w_curve * curvatureAhead * std::fabs(speed) * DT;
 
     // Fitness: progress + speed bonus minus accumulated penalties (overwritten each tick)
     fitness = cfg.w_progress * maxProgress + speedBonus - reversePenalty - regressPenalty - curvePenalty;
