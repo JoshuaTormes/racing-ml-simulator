@@ -151,22 +151,23 @@ bool Track::pointNearSegment(Vec2 p, Vec2 a, Vec2 b, float halfWidth) {
     return (p - closest).length() < halfWidth;
 }
 
+static bool inConvexQuad(Vec2 p, Vec2 a, Vec2 b, Vec2 c, Vec2 d) {
+    auto cross2d = [](Vec2 u, Vec2 v) { return u.x * v.y - u.y * v.x; };
+    float d0 = cross2d(b - a, p - a);
+    float d1 = cross2d(c - b, p - b);
+    float d2 = cross2d(d - c, p - c);
+    float d3 = cross2d(a - d, p - d);
+    bool allPos = (d0 >= 0) && (d1 >= 0) && (d2 >= 0) && (d3 >= 0);
+    bool allNeg = (d0 <= 0) && (d1 <= 0) && (d2 <= 0) && (d3 <= 0);
+    return allPos || allNeg;
+}
+
 bool Track::isInsideTrack(Vec2 p) const {
-    int n = (int)waypoints_.size();
     int segs = (int)leftBorder_.size() - 1;
-    // Check if point is within track_width/2 of any center segment
-    float hw = trackWidth_ * 0.5f;
     for (int i = 0; i < segs; ++i) {
-        // Use the midline between left and right border segments
-        Vec2 cA = (leftBorder_[i]   + rightBorder_[i])   * 0.5f;
-        Vec2 cB = (leftBorder_[i+1] + rightBorder_[i+1]) * 0.5f;
-        if (pointNearSegment(p, cA, cB, hw)) return true;
-    }
-    // For open track, also handle last wp
-    if (!closed_ && n >= 2) {
-        Vec2 cA = (leftBorder_[n-2] + rightBorder_[n-2]) * 0.5f;
-        Vec2 cB = (leftBorder_[n-1] + rightBorder_[n-1]) * 0.5f;
-        if (pointNearSegment(p, cA, cB, hw)) return true;
+        if (inConvexQuad(p, leftBorder_[i], leftBorder_[i+1],
+                            rightBorder_[i+1], rightBorder_[i]))
+            return true;
     }
     return false;
 }
