@@ -33,7 +33,7 @@ struct RewardConfig {
     float w_reverse  = 0.5f;
     // w_regress: penalty per unit of progress regression per second (maxProgress - totalProg).
     // Makes reversing "expensive" in fitness terms. 0 = disabled. Range: [0, inf). Default: 1.0.
-    float w_regress  = 0.3f;
+    float w_regress  = 2.0f;
     // w_speed: bonus per unit of (speed/MAX_SPEED) per second while making forward progress.
     // Incentivizes maintaining speed through straights without rewarding crashing fast. Range: [0, inf). Default: 0.3.
     float w_speed    = 0.3f;
