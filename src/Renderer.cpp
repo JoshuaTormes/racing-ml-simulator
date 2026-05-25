@@ -6,9 +6,11 @@
 #include <sstream>
 #include <iomanip>
 #include <limits>
+#include <cstdlib>
 
 Renderer::Renderer(unsigned width, unsigned height, const std::string& fontPath)
     : window_(sf::VideoMode({width, height}), "Racing ML Sim")
+    , speedFieldRect_(sf::Vector2f{440.f, 8.f}, sf::Vector2f{156.f, 26.f})
     , prevMapBtn_(sf::Vector2f{606.f, 8.f}, sf::Vector2f{90.f, 26.f})
     , restartBtn_(sf::Vector2f{704.f, 8.f}, sf::Vector2f{90.f, 26.f})
     , nextMapBtn_(sf::Vector2f{802.f, 8.f}, sf::Vector2f{90.f, 26.f})
@@ -24,28 +26,53 @@ bool Renderer::handleEvents() {
             return false;
         }
         if (const auto* kp = e->getIf<sf::Event::KeyPressed>()) {
-            if (kp->code == sf::Keyboard::Key::T)
-                toggleTurbo_ = true;
+            if (speedFocused_) {
+                if (kp->code == sf::Keyboard::Key::Enter)
+                    commitSpeed();
+                else if (kp->code == sf::Keyboard::Key::Escape)
+                    speedFocused_ = false; // cancel, keep previous value
+            }
+        }
+        if (speedFocused_) {
+            if (const auto* te = e->getIf<sf::Event::TextEntered>()) {
+                char32_t u = te->unicode;
+                if (u >= U'0' && u <= U'9') {
+                    if (speedText_.size() < 5) speedText_ += (char)u;
+                } else if (u == 8 && !speedText_.empty()) { // backspace
+                    speedText_.pop_back();
+                }
+            }
         }
         if (const auto* mb = e->getIf<sf::Event::MouseButtonPressed>()) {
             if (mb->button == sf::Mouse::Button::Left) {
                 sf::Vector2f p((float)mb->position.x, (float)mb->position.y);
-                if (restartBtn_.contains(p))
-                    restartClicked_ = true;
-                else if (prevMapBtn_.contains(p))
-                    mapDelta_ = -1;
-                else if (nextMapBtn_.contains(p))
-                    mapDelta_ = +1;
+                if (speedFieldRect_.contains(p)) {
+                    speedFocused_ = true;
+                    speedText_.clear();
+                } else {
+                    if (speedFocused_) commitSpeed(); // click away commits
+                    if (restartBtn_.contains(p))
+                        restartClicked_ = true;
+                    else if (prevMapBtn_.contains(p))
+                        mapDelta_ = -1;
+                    else if (nextMapBtn_.contains(p))
+                        mapDelta_ = +1;
+                }
             }
         }
     }
     return window_.isOpen();
 }
 
-bool Renderer::consumeToggleTurbo() {
-    bool v = toggleTurbo_;
-    toggleTurbo_ = false;
-    return v;
+void Renderer::commitSpeed() {
+    if (!speedText_.empty()) {
+        int v = std::atoi(speedText_.c_str());
+        if (v < 1) v = 1;
+        if (v > 100000) v = 100000;
+        speedValue_ = (float)v;
+    }
+    speedFocused_ = false;
+    speedText_.clear();
 }
 
 bool Renderer::consumeRestart() {
@@ -80,6 +107,52 @@ void Renderer::drawTrack(const Track& track) {
         dot.setFillColor(sf::Color(100, 100, 255, 120));
         dot.setPosition({wp.x - 4.f, wp.y - 4.f});
         window_.draw(dot);
+    }
+
+    const auto& wps = track.waypoints();
+    const auto& lb  = track.leftBorder();
+    const auto& rb  = track.rightBorder();
+    int n = (int)wps.size();
+
+    // Draw a solid colored line
+    auto drawLine = [&](Vec2 a, Vec2 b, sf::Color col, float thickness) {
+        Vec2 d = {b.x - a.x, b.y - a.y};
+        float len = std::sqrt(d.x*d.x + d.y*d.y);
+        if (len < 1.f) return;
+        sf::RectangleShape rect({len, thickness});
+        rect.setFillColor(col);
+        rect.setOrigin({0.f, thickness * 0.5f});
+        rect.setPosition({a.x, a.y});
+        rect.setRotation(sf::radians(std::atan2(d.y, d.x)));
+        window_.draw(rect);
+    };
+
+    // Draw a checkered line (alternating black/white tiles)
+    auto drawCheckered = [&](Vec2 a, Vec2 b, float thickness) {
+        Vec2 d = {b.x - a.x, b.y - a.y};
+        float len = std::sqrt(d.x*d.x + d.y*d.y);
+        if (len < 1.f) return;
+        int tiles = 8;
+        for (int t = 0; t < tiles; ++t) {
+            float t0 = (float)t / tiles;
+            Vec2 p = {a.x + d.x * t0, a.y + d.y * t0};
+            sf::RectangleShape rect({len / tiles, thickness});
+            rect.setFillColor((t % 2 == 0) ? sf::Color::White : sf::Color::Black);
+            rect.setOrigin({0.f, thickness * 0.5f});
+            rect.setPosition({p.x, p.y});
+            rect.setRotation(sf::radians(std::atan2(d.y, d.x)));
+            window_.draw(rect);
+        }
+    };
+
+    // Start line — use pre-computed border points at wp[0]
+    if (!lb.empty()) {
+        drawLine(lb[0], rb[0], sf::Color(255, 255, 255, 200), 5.f);
+    }
+
+    // Finish line — use pre-computed border points at wp[n-1]
+    if (n >= 2 && (int)lb.size() >= n) {
+        drawCheckered(lb[n-1], rb[n-1], 6.f);
     }
 
     // Obstacles
@@ -176,6 +249,30 @@ void Renderer::drawControls(const std::string& mapName) {
     }
 }
 
+void Renderer::drawSpeedField() {
+    const auto& r = speedFieldRect_;
+    sf::RectangleShape box({r.size.x, r.size.y});
+    box.setPosition({r.position.x, r.position.y});
+    box.setFillColor(speedFocused_ ? sf::Color(40, 60, 90) : sf::Color(60, 60, 70));
+    box.setOutlineColor(speedFocused_ ? sf::Color(120, 200, 255) : sf::Color(160, 160, 160));
+    box.setOutlineThickness(speedFocused_ ? 2.f : 1.f);
+    window_.draw(box);
+
+    if (fontLoaded_) {
+        std::ostringstream ss;
+        ss << "Vel: ";
+        if (speedFocused_)
+            ss << (speedText_.empty() ? "" : speedText_) << "_";
+        else
+            ss << (int)speedValue_ << "x";
+
+        sf::Text text(font_, ss.str(), 14);
+        text.setFillColor(sf::Color::White);
+        text.setPosition({r.position.x + 8.f, r.position.y + 5.f});
+        window_.draw(text);
+    }
+}
+
 void Renderer::render(const Game& game, bool showRays) {
     window_.clear(sf::Color(30, 30, 30));
     drawTrack(game.track());
@@ -184,7 +281,11 @@ void Renderer::render(const Game& game, bool showRays) {
     // In large populations only render up to 200 cars
     int limit = std::min((int)cars.size(), 200);
     for (int i = 0; i < limit; ++i) {
-        if (cars[i].done) continue;
+        if (cars[i].done) {
+            if (cars[i].doneReason == DoneReason::Completed)
+                drawCar(cars[i], sf::Color(0, 255, 120, 200)); // green = completed
+            continue;
+        }
         sf::Color col = (i == 0) ? sf::Color::Yellow : sf::Color(100, 200, 100, 180);
         drawCar(cars[i], col);
         if (showRays && i == 0) drawRays(cars[i]);
@@ -194,7 +295,7 @@ void Renderer::render(const Game& game, bool showRays) {
     window_.display();
 }
 
-void Renderer::renderTraining(const TrainingSession& session, bool turbo) {
+void Renderer::renderTraining(const TrainingSession& session) {
     window_.clear(sf::Color(30, 30, 30));
     drawTrack(session.game().track());
 
@@ -212,18 +313,23 @@ void Renderer::renderTraining(const TrainingSession& session, bool turbo) {
     }
 
     for (int i = 0; i < limit; ++i) {
-        if (cars[i].done) continue;
+        if (cars[i].done) {
+            if (cars[i].doneReason == DoneReason::Completed)
+                drawCar(cars[i], sf::Color(0, 255, 120, 200)); // green = completed lap
+            continue;
+        }
         sf::Color col = (i == bestIdx) ? sf::Color::Yellow : sf::Color(100, 200, 100, 180);
         drawCar(cars[i], col);
     }
 
-    drawTrainingHUD(session, turbo);
+    drawTrainingHUD(session);
     drawFitnessGraph(session.history());
     drawControls(session.game().track().name());
+    drawSpeedField();
     window_.display();
 }
 
-void Renderer::drawTrainingHUD(const TrainingSession& session, bool turbo) {
+void Renderer::drawTrainingHUD(const TrainingSession& session) {
     if (!fontLoaded_) return;
 
     const auto& stats = session.lastStats();
@@ -242,7 +348,7 @@ void Renderer::drawTrainingHUD(const TrainingSession& session, bool turbo) {
         ss << "Mean: " << stats.meanFitness << "\n";
         ss << "Done: " << stats.completed << "/" << stats.population << "\n";
     }
-    ss << (turbo ? "[TURBO]" : "[REALTIME]");
+    ss << "Velocidade: " << (int)speedValue_ << "x";
 
     sf::Text text(font_, ss.str(), 16);
     text.setFillColor(sf::Color::White);

@@ -47,7 +47,7 @@ static void printUsage(const char* argv0) {
 }
 
 static std::vector<float> loadChampion(const std::string& path) {
-    NeuralNetwork nn({OBS_SIZE, 8, 2});
+    NeuralNetwork nn(defaultTopology());
     nn.load(path);
     return nn.getWeights();
 }
@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
         wcfg.population = 1;
         Game game(wcfg);
         {
-            NeuralNetwork nn({OBS_SIZE, 8, 2});
+            NeuralNetwork nn(defaultTopology());
             nn.setWeights(w);
             std::vector<std::unique_ptr<AIController>> ctrls;
             ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
@@ -164,7 +164,6 @@ int main(int argc, char* argv[]) {
         // Windowed training
         TrainingSession session(cfg, makeTrainer(algo), generations, outDir, champion);
         Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
-        bool turbo = false;
 
         {
         auto mapDir = std::filesystem::path(cfg.map).parent_path().string();
@@ -176,50 +175,42 @@ int main(int argc, char* argv[]) {
         auto prev = Clock::now();
         float accumulator = 0.f;
 
+        // Cap per-frame ticks so a high multiplier never freezes the UI; the
+        // sim then just runs at whatever speed the hardware sustains.
+        const int MAX_TICKS_PER_FRAME = 500;
+
         while (renderer.isOpen() && !session.done()) {
             if (!renderer.handleEvents()) break;
-            if (renderer.consumeToggleTurbo()) turbo = !turbo;
             if (renderer.consumeRestart()) { session.beginGeneration(); accumulator = 0.f; prev = Clock::now(); }
             if (int d = renderer.consumeMapDelta(); d && !maps.empty()) {
                 idx = (idx + d + (int)maps.size()) % (int)maps.size();
                 session.setMap(maps[idx]); accumulator = 0.f; prev = Clock::now();
             }
 
-            if (turbo) {
-                // Run many ticks (up to full generation) per frame
-                int budget = 2000;
-                while (budget-- > 0 && !session.done()) {
-                    if (session.generationComplete()) {
-                        session.endGeneration();
-                        if (!session.done()) session.beginGeneration();
-                    } else {
-                        session.tick();
-                    }
+            auto now = Clock::now();
+            float dt = std::chrono::duration<float>(now - prev).count();
+            prev = now;
+            if (dt > 0.25f) dt = 0.25f;                  // avoid a huge catch-up after a hitch
+            accumulator += dt * renderer.simSpeed();     // speed multiplier from the on-screen field
+
+            int budget = MAX_TICKS_PER_FRAME;
+            while (accumulator >= DT && budget-- > 0) {
+                if (session.generationComplete()) {
+                    session.endGeneration();
+                    if (session.done()) break;
+                    session.beginGeneration();
                 }
-            } else {
-                auto now = Clock::now();
-                float dt = std::chrono::duration<float>(now - prev).count();
-                prev = now;
-                accumulator += dt;
-                while (accumulator >= DT) {
-                    if (!session.generationComplete())
-                        session.tick();
-                    accumulator -= DT;
-                    if (session.generationComplete()) {
-                        session.endGeneration();
-                        if (!session.done()) session.beginGeneration();
-                        accumulator = 0.f;
-                        break;
-                    }
-                }
+                session.tick();
+                accumulator -= DT;
             }
-            prev = Clock::now(); // keep prev in sync after turbo burst
-            renderer.renderTraining(session, turbo);
+            if (accumulator > DT) accumulator = 0.f;     // budget exhausted: drop backlog, don't spiral
+
+            renderer.renderTraining(session);
         }
         // Keep window open showing final state
         while (renderer.isOpen()) {
             if (!renderer.handleEvents()) break;
-            renderer.renderTraining(session, turbo);
+            renderer.renderTraining(session);
         }
         } // maps scope
 #endif
@@ -243,7 +234,7 @@ int main(int argc, char* argv[]) {
         std::mt19937 rng(cfg.seed + 1);
         for (int i = 1; i < cfg.population; ++i)
             ctrls.push_back(std::make_unique<NeuralNetworkController>(
-                NeuralNetwork({OBS_SIZE, 8, 2}, (unsigned)rng())));
+                NeuralNetwork(defaultTopology(), (unsigned)rng())));
         game.setControllers(std::move(ctrls));
     }
 
