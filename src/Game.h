@@ -41,6 +41,20 @@ public:
 
     const SimConfig& config() const { return cfg_; }
 
+    // ---------------------------------------------------------------------------
+    // Simulate a single car (ctrl) on a track to completion; no Game state used.
+    // Thread-safe: only reads track/reward; ctrl and Car are local to the caller.
+    // ---------------------------------------------------------------------------
+    struct EpisodeResult {
+        float      fitness     = 0.f;
+        float      maxProgress = 0.f;
+        float      episodeTime = 0.f;
+        DoneReason doneReason  = DoneReason::None;
+    };
+    static EpisodeResult simulateEpisode(const Track& track,
+                                         AIController& ctrl,
+                                         const RewardConfig& reward);
+
 private:
     SimConfig                              cfg_;
     std::unique_ptr<Track>                 track_;

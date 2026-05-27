@@ -4,6 +4,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <thread>
+#include <atomic>
 
 enum class FitnessAgg { Min, Mean };
 
@@ -23,6 +25,11 @@ public:
     bool generationComplete() const;
     void endGeneration();
     bool done() const;
+
+    // Headless parallel evaluation (fills perMapFitness_ for all maps × cars)
+    void evaluateGenerationParallel();
+    // Common finalization: aggregate + stats + saves + held-out + evolve
+    void finalizeGeneration();
 
     // Replace active track; in single-map mode updates trainMaps_[0] and restarts.
     // In multi-map mode restarts the generation from trainMaps_[0] (path ignored).
@@ -55,6 +62,16 @@ private:
     std::vector<std::vector<float>> perMapFitness_;  // [mapIdx][carIdx] raw fitness
     std::vector<float>              mapNorm_;         // normalisation constant per train map
     int                             valEvery_ = 10;  // held-out evaluation frequency (gens)
+
+    // Cached tracks (loaded once in constructor; reused every generation)
+    std::vector<std::unique_ptr<Track>> trainTracks_;
+    std::vector<std::unique_ptr<Track>> valTracks_;
+
+    // Parallelism
+    int                          workerCount_ = 1;
+
+    // Per-car done-reason from diagnostic map (map 0), shared between paths
+    std::vector<DoneReason>      diagReasons_;
 
     void loadTrainMap(size_t mapIdx);
     void recordCurrentMapFitness();

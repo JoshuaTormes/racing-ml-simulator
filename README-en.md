@@ -67,32 +67,33 @@ Opens a 900×700 window. **Car 0** (yellow) is controlled by the keyboard; the o
 ./build/racing_sim --population 10   # more cars with random NNs
 ```
 
-### Headless training (fastest)
+### Headless training (fastest — parallel)
 
-Generational loop without a window: runs N generations, prints stats, and saves weights.
+Generational loop without a window. All **M maps × P cars** of a generation are evaluated in parallel using a worker thread pool — no map reloading between generations.
 
 ```bash
-# 100 generations, 200 cars, genetic algorithm (default)
-./build/racing_sim --train --headless --population 200 --generations 100
+# 1000 cars, 5000 generations (recommended for serious training)
+./build/racing_sim --train --headless --population 1000 --generations 5000
 
-# Switch algorithm
-./build/racing_sim --train --headless --algo random_search --population 100 --generations 50
-./build/racing_sim --train --headless --algo hillclimb     --population 100 --generations 50
+# Control thread count (default: all available cores)
+./build/racing_sim --train --headless --population 1000 --generations 5000 --threads 8
 
 # Control seed and output directory
 ./build/racing_sim --train --headless --seed 123 --out results/
 
 # Resume from a saved champion
-./build/racing_sim --train --headless --load out/best.rnnw --generations 50
+./build/racing_sim --train --headless --load out/best.rnnw --generations 5000
 ```
 
 Terminal output (one line per generation):
 
 ```
-gen    1/100  best=  344.69  mean=  -32.75  std= 62.26  done=0/200
-gen    2/100  best=  412.03  mean=   -8.11  std= 71.40  done=0/200
+gen    1/5000  agg= -0.308 | m0= 0.333 m1= 0.151 m2= 0.067 m3= 0.037 m4= 0.082 m5= 0.021 |  mean= -0.798  std= 0.242  done=0/1000  [col=480 stall=520 timeout=0]
+gen    2/5000  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 m3= 0.412 m4= 0.056 m5= 0.206 |  mean= -0.241  std= 0.381  done=8/1000  [col=320 stall=672 timeout=0]
 ...
 ```
+
+Columns: `agg` = aggregated fitness (min across maps), `m0..m5` = best normalised fitness per map, `done` = cars that completed the circuit.
 
 Files generated in `out/` (or `--out <dir>`):
 
@@ -101,15 +102,15 @@ Files generated in `out/` (or `--out <dir>`):
 | `best.rnnw` | Weights of the **global champion** (overwritten when a new best is found) |
 | `gen_0001.rnnw` … `gen_NNNN.rnnw` | Snapshot of the best individual in generation N |
 
-### Training with window
+### Training with window (serial — visualisation)
 
-Same as headless, but opens a window to watch evolution live. Shows generational HUD and a fitness-per-generation chart.
+Same as headless, but opens a window to watch evolution live. **Note:** windowed mode is serial — maps are evaluated one at a time in sync with the renderer. Use `--headless` for large-scale training.
 
 ```bash
-./build/racing_sim --train --population 100 --generations 50
+./build/racing_sim --train --population 100 --generations 200
 ```
 
-Press **`T`** to toggle between **real-time** (watch the race at 60 Hz) and **turbo** (advances several generations per frame, showing only the current state + chart).
+With multiple maps, the window automatically cycles through the training maps within each generation — the current map name is shown on screen. Press **`T`** to toggle between **real-time** (60 Hz) and **turbo** (maximum speed).
 
 ### Watch a trained network
 

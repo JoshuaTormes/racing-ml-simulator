@@ -125,6 +125,27 @@ double Game::runHeadlessEpisode() {
     return std::chrono::duration<double>(t1 - t0).count();
 }
 
+// ---------------------------------------------------------------------------
+// simulateEpisode — pure, stateless, thread-safe simulation of one car
+// ---------------------------------------------------------------------------
+Game::EpisodeResult Game::simulateEpisode(const Track& track,
+                                          AIController& ctrl,
+                                          const RewardConfig& reward) {
+    Car car;
+    car.reset(track.spawnPos(), track.spawnAngle());
+    ctrl.reset(); // no-op for NN; preserves contract for future controllers
+    while (!car.done) {
+        // Mirrors Game::updateRange order: observe → decide → applyAction → stepDone
+        // (stepDone updates the sensor internally; on tick 0 sensor is all-zeros,
+        //  matching the batch path which also starts with an un-initialised sensor)
+        Observation obs = car.observe(track);
+        Action      act = ctrl.decide(obs);
+        car.applyAction(act);
+        car.stepDone(track, reward);
+    }
+    return { car.fitness, car.maxProgress, car.episodeTime, car.doneReason };
+}
+
 void Game::runBenchmark(const SimConfig& baseCfg) {
     SimConfig cfg = baseCfg;
     cfg.headless = true;

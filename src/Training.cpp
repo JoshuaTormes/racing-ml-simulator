@@ -9,6 +9,8 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <thread>
+#include <atomic>
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -46,6 +48,27 @@ TrainingSession::TrainingSession(SimConfig sim,
     perMapFitness_.assign(trainMaps_.size(),
                           std::vector<float>(trainer_->populationSize(), 0.f));
     mapNorm_.assign(trainMaps_.size(), 1.f);
+
+    // Cache training tracks (loaded once; reused every generation)
+    trainTracks_.reserve(trainMaps_.size());
+    for (size_t i = 0; i < trainMaps_.size(); ++i) {
+        trainTracks_.push_back(std::make_unique<Track>(trainMaps_[i]));
+        mapNorm_[i] = mapNormConst(*trainTracks_[i]);
+    }
+
+    // Cache validation tracks
+    valTracks_.reserve(valMaps_.size());
+    for (const auto& vmap : valMaps_)
+        valTracks_.push_back(std::make_unique<Track>(vmap));
+
+    // Worker thread count
+    workerCount_ = sim.threads > 0
+        ? sim.threads
+        : (int)std::thread::hardware_concurrency();
+    if (workerCount_ < 1) workerCount_ = 1;
+
+    // Diagnostic reasons vector (one per car)
+    diagReasons_.assign(trainer_->populationSize(), DoneReason::None);
 
     std::filesystem::create_directories(outDir_);
 }
@@ -142,10 +165,56 @@ bool TrainingSession::generationComplete() const {
         && game_.episodeDone();
 }
 
-void TrainingSession::endGeneration() {
-    // Record last (current) map fitness — earlier maps are recorded in advanceIfMapDone
-    recordCurrentMapFitness();
+// ---------------------------------------------------------------------------
+// evaluateGenerationParallel — fills perMapFitness_[M][P] using a worker pool
+// ---------------------------------------------------------------------------
+void TrainingSession::evaluateGenerationParallel() {
+    size_t P = trainer_->populationSize();
+    size_t M = trainTracks_.size();
 
+    // Build one NeuralNetwork per car (read-only during workers; each worker
+    // copies it into a local NeuralNetworkController to avoid data races)
+    std::vector<NeuralNetwork> nets;
+    nets.reserve(P);
+    for (size_t c = 0; c < P; ++c) {
+        NeuralNetwork nn(defaultTopology());
+        nn.setWeights(trainer_->weights(c));
+        nets.push_back(std::move(nn));
+    }
+
+    // diagReasons_ captures done-reason from map 0 for the stats breakdown
+    diagReasons_.assign(P, DoneReason::None);
+
+    std::atomic<size_t> next{0};
+    const size_t total = M * P;
+    const RewardConfig& reward = game_.config().reward;
+
+    std::vector<std::thread> workers;
+    workers.reserve((size_t)workerCount_);
+
+    for (int w = 0; w < workerCount_; ++w) {
+        workers.emplace_back([&]() {
+            size_t t;
+            while ((t = next.fetch_add(1, std::memory_order_relaxed)) < total) {
+                size_t m = t / P;
+                size_t c = t % P;
+                // Copy the NN into a local controller (each task owns its copy)
+                NeuralNetworkController ctrl(nets[c]);
+                auto r = Game::simulateEpisode(*trainTracks_[m], ctrl, reward);
+                perMapFitness_[m][c] = r.fitness;
+                if (m == 0)
+                    diagReasons_[c] = r.doneReason;
+            }
+        });
+    }
+    for (auto& th : workers) th.join();
+}
+
+// ---------------------------------------------------------------------------
+// finalizeGeneration — aggregation, stats, saves, held-out, evolve
+// (used by both the parallel headless path and the windowed serial path)
+// ---------------------------------------------------------------------------
+void TrainingSession::finalizeGeneration() {
     // Aggregate across all training maps
     auto agg = aggregateFitness();
     size_t n = agg.size();
@@ -184,9 +253,9 @@ void TrainingSession::endGeneration() {
         stats.perMapBest[mi] = mb;
     }
 
-    // Done-reason breakdown from the last map (representative sample)
-    for (const auto& car : game_.cars()) {
-        switch (car.doneReason) {
+    // Done-reason breakdown from diagReasons_ (map 0, one entry per car)
+    for (size_t c = 0; c < n; ++c) {
+        switch (diagReasons_[c]) {
             case DoneReason::Completed: ++stats.completed;  break;
             case DoneReason::Collision: ++stats.nCollision; break;
             case DoneReason::Stall:     ++stats.nStall;     break;
@@ -226,42 +295,48 @@ void TrainingSession::endGeneration() {
     ++currentGen_;
 }
 
+void TrainingSession::endGeneration() {
+    // Record last (current) map fitness — earlier maps are recorded in advanceIfMapDone
+    recordCurrentMapFitness();
+
+    // Capture diagReasons_ from game_.cars() (map 0 = first map; windowed visits sequentially,
+    // but representative sample from the last-processed map is acceptable here —
+    // we use the current map's cars directly to match the old behaviour for the windowed path)
+    diagReasons_.resize(game_.cars().size());
+    for (size_t c = 0; c < game_.cars().size(); ++c)
+        diagReasons_[c] = game_.cars()[c].doneReason;
+
+    finalizeGeneration();
+}
+
 bool TrainingSession::done() const {
     return currentGen_ >= generations_;
 }
 
 // ---------------------------------------------------------------------------
-// Held-out validation (champion only, no fitness feedback)
+// Held-out validation — uses simulateEpisode; no game_.loadMap calls
 // ---------------------------------------------------------------------------
 void TrainingSession::evaluateHeldOut(size_t championIdx) {
     if (valMaps_.empty()) return;
 
     const auto& champWeights = trainer_->weights(championIdx);
-
-    // Build N copies of the champion controller to match population size
-    {
-        std::vector<std::unique_ptr<AIController>> champCtrls;
-        champCtrls.reserve((size_t)game_.config().population);
-        for (int i = 0; i < game_.config().population; ++i) {
-            NeuralNetwork nn(defaultTopology());
-            nn.setWeights(champWeights);
-            champCtrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
-        }
-        game_.setControllers(std::move(champCtrls));
-    }
+    const RewardConfig& reward = game_.config().reward;
 
     std::cout << "  [held-out gen=" << currentGen_ + 1 << "]\n";
-    for (size_t vi = 0; vi < valMaps_.size(); ++vi) {
-        game_.loadMap(valMaps_[vi]);
-        int numWp = (int)game_.track().waypoints().size();
-        while (!game_.episodeDone()) game_.tick();
+    for (size_t vi = 0; vi < valTracks_.size(); ++vi) {
+        const Track& vtrack = *valTracks_[vi];
+        int numWp = (int)vtrack.waypoints().size();
 
-        // Car 0 is representative (all are identical copies of the champion)
-        const auto& car = game_.cars()[0];
-        float progFrac = (numWp > 1) ? car.maxProgress / (float)(numWp - 1) : 0.f;
+        NeuralNetwork nn(defaultTopology());
+        nn.setWeights(champWeights);
+        NeuralNetworkController ctrl(std::move(nn));
+
+        auto r = Game::simulateEpisode(vtrack, ctrl, reward);
+
+        float progFrac = (numWp > 1) ? r.maxProgress / (float)(numWp - 1) : 0.f;
 
         std::string reason;
-        switch (car.doneReason) {
+        switch (r.doneReason) {
             case DoneReason::Completed: reason = "completed"; break;
             case DoneReason::Collision: reason = "collision"; break;
             case DoneReason::Stall:     reason = "stall";     break;
@@ -274,19 +349,16 @@ void TrainingSession::evaluateHeldOut(size_t championIdx) {
                   << "    val[" << mapName << "]: prog=" << progFrac
                   << " reason=" << reason << "\n";
     }
-
-    // Restore first training map so game_ is in a sane state for the next beginGeneration
-    loadTrainMap(0);
 }
 
 // ---------------------------------------------------------------------------
-// runAll (headless)
+// runAll (headless) — parallel evaluation; game_ not used for evaluation
 // ---------------------------------------------------------------------------
 void TrainingSession::runAll() {
     while (!done()) {
-        beginGeneration();
-        while (!generationComplete()) tick();
-        endGeneration();
+        for (auto& v : perMapFitness_) std::fill(v.begin(), v.end(), 0.f);
+        evaluateGenerationParallel();
+        finalizeGeneration();
     }
 }
 

@@ -68,32 +68,33 @@ Abre uma janela 900×700. O **carro 0** (amarelo) é controlado pelo teclado; os
 ./build/racing_sim --population 10   # mais carros com NN aleatória
 ```
 
-### Treinamento headless (mais rápido)
+### Treinamento headless (mais rápido — paralelo)
 
-Loop geracional sem janela: roda N gerações, imprime stats e salva os pesos.
+Loop geracional sem janela. Todos os **M mapas × P carros** de uma geração são avaliados em paralelo num pool de threads — sem recarregar mapas entre gerações.
 
 ```bash
-# 100 gerações, 200 carros, algoritmo genético (default)
-./build/racing_sim --train --headless --population 200 --generations 100
+# 1000 carros, 5000 gerações (recomendado para treino sério)
+./build/racing_sim --train --headless --population 1000 --generations 5000
 
-# Trocar o algoritmo
-./build/racing_sim --train --headless --algo random_search --population 100 --generations 50
-./build/racing_sim --train --headless --algo hillclimb     --population 100 --generations 50
+# Controlar número de threads (default: todos os cores disponíveis)
+./build/racing_sim --train --headless --population 1000 --generations 5000 --threads 8
 
-# Controlar seed e saída
+# Controlar seed e pasta de saída
 ./build/racing_sim --train --headless --seed 123 --out resultados/
 
 # Retomar a partir de um campeão salvo
-./build/racing_sim --train --headless --load out/best.rnnw --generations 50
+./build/racing_sim --train --headless --load out/best.rnnw --generations 5000
 ```
 
 Saída no terminal (uma linha por geração):
 
 ```
-gen    1/100  best=  344.69  mean=  -32.75  std= 62.26  done=0/200
-gen    2/100  best=  412.03  mean=   -8.11  std= 71.40  done=0/200
+gen    1/5000  agg= -0.308 | m0= 0.333 m1= 0.151 m2= 0.067 m3= 0.037 m4= 0.082 m5= 0.021 |  mean= -0.798  std= 0.242  done=0/1000  [col=480 stall=520 timeout=0]
+gen    2/5000  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 m3= 0.412 m4= 0.056 m5= 0.206 |  mean= -0.241  std= 0.381  done=8/1000  [col=320 stall=672 timeout=0]
 ...
 ```
+
+Colunas: `agg` = fitness agregado (min entre mapas), `m0..m5` = melhor fitness normalizado por mapa, `done` = carros que completaram o circuito.
 
 ### Treinamento multi-mapa (generalização)
 
@@ -122,15 +123,15 @@ Arquivos gerados em `out/` (ou `--out <dir>`):
 | `best.rnnw` | Pesos do **campeão global** (sobrescrito quando há novo melhor) |
 | `gen_0001.rnnw` … `gen_NNNN.rnnw` | Snapshot do melhor da geração N |
 
-### Treinamento com janela
+### Treinamento com janela (serial — visualização)
 
-Igual ao headless, mas abre a janela para assistir à evolução ao vivo. Mostra HUD geracional e gráfico do melhor fitness por geração.
+Igual ao headless, mas abre a janela para assistir à evolução ao vivo. **Atenção:** o modo janela é serial — os mapas são percorridos um por um em sincronia com o render. Para treinos grandes use `--headless`.
 
 ```bash
-./build/racing_sim --train --population 100 --generations 50
+./build/racing_sim --train --population 100 --generations 200
 ```
 
-Pressione **`T`** para alternar entre **tempo real** (assiste a corrida a 60 Hz) e **turbo** (avança várias gerações por frame, mostrando só o estado atual + gráfico).
+Com múltiplos mapas, a janela alterna automaticamente entre os mapas de treino ao longo de cada geração — o nome do mapa atual aparece na tela. Pressione **`T`** para alternar entre **tempo real** (60 Hz) e **turbo** (máxima velocidade).
 
 ### Assistir uma rede treinada
 
