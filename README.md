@@ -19,6 +19,7 @@ A motivação central não é o jogo em si, mas a qualidade da arquitetura como 
 9. [Constantes configuráveis](#constantes-configuráveis)
 10. [Estrutura de arquivos](#estrutura-de-arquivos)
 
+
 ---
 
 ## Requisitos
@@ -94,6 +95,26 @@ gen    2/100  best=  412.03  mean=   -8.11  std= 71.40  done=0/200
 ...
 ```
 
+### Treinamento multi-mapa (generalização)
+
+Treina em vários mapas simultaneamente para produzir um agente que generaliza, em vez de memorizar um único circuito.
+
+```bash
+# Automático: usa todos os *.json em maps/, split 6 treino / 2 val
+./build/racing_sim --train --headless --population 200 --generations 150
+
+# Explicitar os mapas de treino e validação
+./build/racing_sim --train --headless \
+  --train-maps maps/map1.json,maps/map2.json,maps/map3.json \
+  --val-maps   maps/map4.json,maps/map5.json \
+  --generations 100
+
+# Usar média em vez de mínimo para o fitness agregado
+./build/racing_sim --train --headless --fitness-agg mean --generations 100
+```
+
+O **fitness agregado** (coluna `agg=` no terminal) é por padrão o **mínimo** entre mapas — força o agente a não ignorar nenhuma pista. Com `--fitness-agg mean` usa a média, mais tolerante a mapas difíceis.
+
 Arquivos gerados em `out/` (ou `--out <dir>`):
 
 | Arquivo | Conteúdo |
@@ -120,6 +141,19 @@ Carrega um arquivo `.rnnw` e abre a janela com 1 carro dirigindo em loop.
 # ou equivalente:
 ./build/racing_sim --load  out/best.rnnw
 ```
+
+### Human vs AI
+
+Você controla o carro amarelo; a rede salva controla o verde. Use `←→↑↓` ou `WASD`.
+
+```bash
+./build/racing_sim --versus out/best.rnnw
+
+# Em um mapa específico:
+./build/racing_sim --versus out/best.rnnw --map maps/map3.json
+```
+
+A corrida reinicia automaticamente quando os dois terminam. Pressione **Restart** (ou `R`) para recomeçar a qualquer momento.
 
 ### Modo headless sem treino
 
@@ -153,38 +187,51 @@ Mede throughput de simulação e sai.
 
 | Tecla | Modo | Ação |
 |---|---|---|
-| `W` / `↑` | default | Acelerar |
-| `S` / `↓` | default | Frear / ré |
-| `A` / `←` | default | Virar à esquerda |
-| `D` / `→` | default | Virar à direita |
+| `W` / `↑` | default, `--versus` | Acelerar |
+| `S` / `↓` | default, `--versus` | Frear |
+| `A` / `←` | default, `--versus` | Virar à esquerda |
+| `D` / `→` | default, `--versus` | Virar à direita |
 | `T` | `--train` | Alternar tempo real ↔ turbo |
+| `< Mapa` / `Mapa >` | todos (janela) | Trocar de pista |
+| Restart | todos (janela) | Reiniciar episódio |
 | Fechar janela | todos | Encerrar |
 
-O carro 0 (amarelo) exibe os **raios de sensor**: verde = distância longa, vermelho = perto da borda.
+O carro 0 (amarelo) exibe os **raios de sensor**: verde = distância longa, vermelho = perto da borda. Em `--versus`, amarelo = você, verde = IA.
 
 ---
 
 ## Opções de linha de comando
 
 ```
---headless              Roda sem janela
---map <path>            Caminho do JSON do mapa (default: maps/map1.json)
---population <N>        Número de carros simultâneos (default: 1)
---seed <S>              Seed do RNG — garante reprodutibilidade (default: 42)
---threads <K>           Threads para atualização dos carros (default: hardware_concurrency)
---benchmark             Mede throughput e sai
+Básico
+  --headless              Roda sem janela
+  --map <path>            Caminho do JSON do mapa (default: maps/map1.json)
+  --population <N>        Número de carros simultâneos (default: 1)
+  --seed <S>              Seed do RNG — garante reprodutibilidade (default: 42)
+  --threads <K>           Threads para atualização dos carros (default: hardware_concurrency)
+  --benchmark             Mede throughput e sai
 
---train                 Ativa o loop geracional de treinamento
---algo <nome>           Algoritmo: genetic | random_search | hillclimb (default: genetic)
---generations <N>       Número de gerações (default: 100)
---out <dir>             Diretório de saída dos pesos (default: out/)
---load <arquivo.rnnw>   Com --train: semeia população do campeão. Sem --train: abre modo watch
---watch <arquivo.rnnw>  Abre janela com a rede salva dirigindo (sem treino)
+Treinamento
+  --train                 Ativa o loop geracional de treinamento
+  --algo <nome>           Algoritmo: genetic | random_search | hillclimb (default: genetic)
+  --generations <N>       Número de gerações (default: 100)
+  --out <dir>             Diretório de saída dos pesos (default: out/)
+  --load <arquivo.rnnw>   Com --train: semeia população do campeão. Sem --train: abre modo watch
 
---help / -h             Exibe ajuda
+Generalização multi-mapa
+  --train-maps <a,b,...>  Lista de mapas de treino separados por vírgula
+  --val-maps <x,y>        Mapas de validação (não usados na seleção, apenas métricas)
+  --fitness-agg <modo>    Como agregar fitness entre mapas: min (default) | mean
+  (sem --train-maps: usa todos os *.json em maps/, split 6 treino / 2 val automático)
+
+Watch / Interativo
+  --watch <arquivo.rnnw>  Abre janela com a rede salva dirigindo (sem treino)
+  --versus <arquivo.rnnw> Human (amarelo, WASD/setas) vs IA (verde) com rede salva
+
+  --help / -h             Exibe ajuda
 ```
 
-**Precedência de modo:** `--benchmark` > `--watch` > `--train` > `--load` (sem train = watch) > modo janela padrão.
+**Precedência de modo:** `--benchmark` > `--watch` > `--versus` > `--train` > `--load` (sem train = watch) > modo janela padrão.
 
 ---
 
@@ -216,7 +263,7 @@ Trainers resume: ok
 TrainingSession headless: ok
 Game headless episode: ok
 
-Results: 136 passed, 0 failed
+Results: 286 passed, 0 failed
 ```
 
 ### O que os testes cobrem
@@ -236,6 +283,10 @@ Results: 136 passed, 0 failed
 | Trainers resume | `initFromWeights` preserva o campeão em `weights(0)` |
 | TrainingSession headless | run de 3 gerações gera `best.rnnw` + `gen_000N.rnnw` recarregáveis |
 | Headless episode | episódio termina e `episodeDone()` retorna `true` |
+| Reverse blocked | `MAX_REVERSE_SPEED=0` impede velocidade negativa |
+| Reverse penalty | `w_reverse > 0` acumula penalidade ao andar de ré |
+| Regress penalty | `w_regress > 0` acumula penalidade ao regredir no percurso |
+| Stall no-progress | carro sem avanço por `STALL_TIMEOUT` termina com `DoneReason::Stall` |
 
 ---
 
@@ -292,10 +343,12 @@ Implemente `AIController` e use a interface `reset()`/`step()`:
 class MeuAgente : public AIController {
 public:
     Action decide(const Observation& obs) override {
-        // obs[0..6]  → 7 leituras de raycast normalizadas [0,1]
-        // obs[7]     → velocidade normalizada [0,1]
-        // obs[8]     → ângulo para o próximo waypoint ∈ [-1,1]
-        // obs[9]     → distância para o próximo waypoint ∈ [0,1]
+        // obs[0..12] → 13 leituras de raycast normalizadas [0,1]
+        // obs[13]    → velocidade normalizada [0,1]
+        // obs[14]    → ângulo para o próximo waypoint ∈ [-1,1]
+        // obs[15]    → distância para o próximo waypoint ∈ [0,1]
+        // obs[16]    → ângulo para o waypoint seguinte (lookahead 2) ∈ [-1,1]
+        // obs[17..26]→ 5x (curvatura, speed_excess) para lookaheads 1-5
         //
         // Retorne Action{throttle, steering} ambos ∈ [-1, 1]
         return Action{1.f, 0.f}; // exemplo: sempre acelera reto
@@ -446,27 +499,46 @@ Todas em `src/core/Constants.h`. Mudar qualquer uma exige recompilar.
 |---|---|---|
 | `SIM_HZ` | 60 | Frequência da simulação (passos/segundo) |
 | `DT` | 1/60 s | Timestep fixo de cada passo |
-| `NUM_RAYS` | 7 | Número de raios do sensor (muda `OBS_SIZE` automaticamente) |
-| `RAY_MAX_LEN` | 300 px | Distância máxima de cada raio; além disso retorna 1.0 |
+| `NUM_RAYS` | 13 | Número de raios do sensor (muda `OBS_SIZE` automaticamente) |
+| `RAY_MAX_LEN` | 400 px | Distância máxima de cada raio; além disso retorna 1.0 |
 | `MAX_SPEED` | 400 px/s | Velocidade máxima do carro |
+| `MAX_REVERSE_SPEED` | 0 px/s | Velocidade máxima de ré (0 = ré desativada) |
 | `ACCEL` | 300 px/s² | Aceleração com throttle positivo |
-| `BRAKE` | 500 px/s² | Desaceleração/ré com throttle negativo |
+| `BRAKE` | 500 px/s² | Desaceleração com throttle negativo |
 | `DRAG` | 0.98 | Fator de atrito por tick (multiplica a velocidade) |
-| `MAX_STEER` | 3.0 rad/s | Taxa máxima de giro a velocidade máxima |
+| `MAX_STEER` | 3.0 rad/s | Taxa máxima de giro |
+| `MAX_LAT_ACCEL` | 650 px/s² | Limite de grip (yawRate ≤ MAX_LAT_ACCEL/v) |
 | `EPISODE_TIMEOUT` | 60 s | Duração máxima de um episódio |
-| `STALL_TIMEOUT` | 5 s | Tempo máximo sem progresso antes de `done` |
-| `OBS_SIZE` | 10 | Tamanho fixo do vetor de observação (= `NUM_RAYS + 3`) |
+| `STALL_TIMEOUT` | 2 s | Tempo sem progresso (ou parado) antes de `done` |
+| `STALL_SPEED` | 4 px/s | Threshold de velocidade mínima para o stall timer |
+| `STALL_PROGRESS_MIN` | 0.05 | Avanço mínimo de waypoint para resetar o timer de stall |
+| `OBS_SIZE` | 27 | Tamanho fixo do vetor de observação (= `NUM_RAYS + 14`) |
+| `NN_HIDDEN` | 32 | Neurônios na camada oculta da rede padrão |
+
+**Vetor de observação (27 floats):**
+
+| Índices | Conteúdo |
+|---|---|
+| `[0..12]` | 13 leituras de raycast normalizadas [0,1] |
+| `[13]` | Velocidade normalizada [0,1] |
+| `[14]` | Ângulo para o próximo waypoint ∈ [-1,1] |
+| `[15]` | Distância para o próximo waypoint ∈ [0,1] |
+| `[16]` | Ângulo para o waypoint seguinte (lookahead 2) ∈ [-1,1] |
+| `[17..26]` | 5 × (curvatura assinada, speed_excess) para lookaheads 1–5 |
 
 Pesos do reward em `src/core/Types.h` (`RewardConfig`):
 
 | Campo | Padrão | Significado |
 |---|---|---|
-| `w_progress` | 1.0 | Multiplicador do progresso por tick |
-| `w_speed` | 0.1 | Bônus por andar rápido |
-| `w_idle` | 0.05 | Penalidade por ficar parado |
-| `w_finish` | 100.0 | Bônus por completar o circuito |
+| `w_progress` | 1.0 | Multiplicador do progresso máximo acumulado |
+| `w_speed` | 0.1 | Bônus de velocidade em trechos retos |
+| `w_checkpoint` | 0.5 | Bônus por passar waypoints curvos |
+| `w_finish` | 200.0 | Bônus por completar o circuito |
+| `w_time` | 1.0 | Bônus de tempo restante ao completar |
 | `w_crash` | 50.0 | Penalidade por colisão |
-| `idle_eps` | 5 px/s | Threshold de velocidade para penalidade de inatividade |
+| `w_reverse` | 0.5 | Penalidade por andar de ré |
+| `w_regress` | 2.0 | Penalidade por regredir no percurso |
+| `w_curve` | 0.0 | Penalidade por alta velocidade em curvas (desativado) |
 
 ---
 
@@ -488,7 +560,7 @@ racing-ml-sim/
 │   │   └── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
 │   ├── AIController.h      # Interface abstrata: decide(Observation) → Action
 │   ├── Track.h / .cpp      # Pista: JSON, bordas, raycast, progresso
-│   ├── Sensor.h / .cpp     # 7 raios normalizados em leque de 180°
+│   ├── Sensor.h / .cpp     # 13 raios normalizados em leque de 180°
 │   ├── Car.h / .cpp        # Física, observação, reward, condições de done
 │   ├── NeuralNetwork.h/.cpp# MLP feedforward + serialização binária RNNW + NNController
 │   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutação
@@ -500,5 +572,5 @@ racing-ml-sim/
 │   ├── HumanController.h/.cpp  # Leitura de teclado → Action (depende de SFML)
 │   └── main.cpp            # Parse de args, dispatch para todos os modos
 └── tests/
-    └── test_main.cpp       # 136 testes: Vec2, geometria, NN, determinismo, GA, Trainers, TrainingSession
+    └── test_main.cpp       # 286 testes: Vec2, geometria, NN, determinismo, GA, Trainers, TrainingSession, reward
 ```
