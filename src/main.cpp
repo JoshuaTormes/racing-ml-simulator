@@ -57,6 +57,7 @@ static void printUsage(const char* argv0) {
         << "  --out <dir>           Output directory for weights (default: out/)\n"
         << "  --load <file.rnnw>    With --train: seed population from champion. Without: watch the network\n"
         << "  --watch <file.rnnw>   Watch a saved network drive (no training)\n"
+        << "  --versus <file.rnnw>  Human (↑↓←→ / WASD) vs saved network. Yellow = you, green = AI\n"
         << "\nMulti-map generalisation\n"
         << "  --train-maps <a,b,..> Comma-separated list of training maps\n"
         << "  --val-maps <x,y>      Comma-separated held-out maps (not used in selection)\n"
@@ -82,6 +83,7 @@ int main(int argc, char* argv[]) {
     std::string outDir      = "out/";
     std::string loadPath;
     std::string watchPath;
+    std::string versusPath;
     std::string trainMapsArg;  // raw comma-separated string
     std::string valMapsArg;
     std::string fitnessAggArg = "min";
@@ -102,6 +104,7 @@ int main(int argc, char* argv[]) {
         else if (arg == "--out"          && i+1 < argc)  outDir          = argv[++i];
         else if (arg == "--load"         && i+1 < argc)  loadPath        = argv[++i];
         else if (arg == "--watch"        && i+1 < argc)  watchPath       = argv[++i];
+        else if (arg == "--versus"       && i+1 < argc)  versusPath      = argv[++i];
         else if (arg == "--train-maps"   && i+1 < argc)  { trainMapsArg = argv[++i]; explicitTrainMaps = true; }
         else if (arg == "--val-maps"     && i+1 < argc)  valMapsArg      = argv[++i];
         else if (arg == "--fitness-agg"  && i+1 < argc)  fitnessAggArg   = argv[++i];
@@ -169,7 +172,61 @@ int main(int argc, char* argv[]) {
 #endif
     };
 
+    // ---- versus: human (car 0) vs loaded NN (car 1) ----
+    auto runVersus = [&](const std::string& path) {
+#ifndef HEADLESS_ONLY
+        std::vector<float> w = loadChampion(path);
+        SimConfig vcfg = cfg;
+        vcfg.population = 2;  // car 0 = you (yellow), car 1 = AI (green)
+        Game game(vcfg);
+        {
+            NeuralNetwork nn(defaultTopology());
+            nn.setWeights(w);
+            std::vector<std::unique_ptr<AIController>> ctrls;
+            ctrls.push_back(std::make_unique<HumanController>());
+            ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
+            game.setControllers(std::move(ctrls));
+        }
+        Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
+        game.reset();
+        {
+            auto mapDir = std::filesystem::path(vcfg.map).parent_path().string();
+            auto maps = listMaps(mapDir);
+            int idx = findMapIndex(maps, vcfg.map);
+            using Clock = std::chrono::steady_clock;
+            auto prev = Clock::now();
+            float accumulator = 0.f;
+            while (renderer.isOpen()) {
+                if (!renderer.handleEvents()) break;
+                if (renderer.consumeRestart()) { game.reset(); accumulator = 0.f; }
+                if (int d = renderer.consumeMapDelta(); d && !maps.empty()) {
+                    idx = (idx + d + (int)maps.size()) % (int)maps.size();
+                    game.loadMap(maps[idx]); accumulator = 0.f;
+                }
+                auto now = Clock::now();
+                float dt = std::chrono::duration<float>(now - prev).count();
+                prev = now;
+                accumulator += dt;
+                while (accumulator >= DT) {
+                    game.tick();
+                    accumulator -= DT;
+                    if (game.episodeDone()) {
+                        game.reset();
+                        accumulator = 0.f;
+                        break;
+                    }
+                }
+                renderer.render(game, /*showRays=*/true);
+            }
+        }
+#else
+        (void)path;
+        std::cerr << "--versus requires a windowed build (no HEADLESS_ONLY)\n";
+#endif
+    };
+
     if (!watchPath.empty()) { runWatch(watchPath); return 0; }
+    if (!versusPath.empty()) { runVersus(versusPath); return 0; }
     if (!loadPath.empty() && !train) { runWatch(loadPath); return 0; }
 
     // ---- training ----

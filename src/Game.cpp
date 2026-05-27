@@ -78,10 +78,12 @@ void Game::tick() {
 
     // Force-kill stragglers: when <= 2% (min 2) of population remains alive,
     // they are not worth waiting for and would stall the generation.
-    int straggler_threshold = std::max(2, n / 50);
+    // Only activate for large populations (n>=50) — avoids killing the single
+    // car in --watch mode or both cars in --versus mode on the first tick.
+    int straggler_threshold = (n >= 50) ? std::max(2, n / 50) : 0;
     int alive = 0;
     for (const auto& c : cars_) if (!c.done) ++alive;
-    if (alive > 0 && alive <= straggler_threshold) {
+    if (straggler_threshold > 0 && alive > 0 && alive <= straggler_threshold) {
         for (auto& c : cars_)
             if (!c.done) { c.done = true; c.doneReason = DoneReason::Timeout; }
     }
