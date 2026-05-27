@@ -63,18 +63,28 @@ void Game::tick() {
     int n = cfg_.population;
     if (numThreads_ <= 1 || n < 64) {
         updateRange(0, n);
-        return;
+    } else {
+        int chunk = (n + numThreads_ - 1) / numThreads_;
+        std::vector<std::thread> threads;
+        threads.reserve(numThreads_);
+        for (int t = 0; t < numThreads_; ++t) {
+            int b = t * chunk;
+            int e = std::min(b + chunk, n);
+            if (b >= e) break;
+            threads.emplace_back([this, b, e]{ updateRange(b, e); });
+        }
+        for (auto& th : threads) th.join();
     }
-    int chunk = (n + numThreads_ - 1) / numThreads_;
-    std::vector<std::thread> threads;
-    threads.reserve(numThreads_);
-    for (int t = 0; t < numThreads_; ++t) {
-        int b = t * chunk;
-        int e = std::min(b + chunk, n);
-        if (b >= e) break;
-        threads.emplace_back([this, b, e]{ updateRange(b, e); });
+
+    // Force-kill stragglers: when <= 2% (min 2) of population remains alive,
+    // they are not worth waiting for and would stall the generation.
+    int straggler_threshold = std::max(2, n / 50);
+    int alive = 0;
+    for (const auto& c : cars_) if (!c.done) ++alive;
+    if (alive > 0 && alive <= straggler_threshold) {
+        for (auto& c : cars_)
+            if (!c.done) { c.done = true; c.doneReason = DoneReason::Timeout; }
     }
-    for (auto& th : threads) th.join();
 }
 
 bool Game::episodeDone() const {

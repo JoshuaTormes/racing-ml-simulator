@@ -278,11 +278,11 @@ void Renderer::render(const Game& game, bool showRays) {
     drawTrack(game.track());
 
     const auto& cars = game.cars();
-    // In large populations only render up to 200 cars
-    int limit = std::min((int)cars.size(), 200);
-    for (int i = 0; i < limit; ++i) {
+    int total = (int)cars.size();
+    int displayLimit = std::min(total, 200);
+    for (int i = 0; i < total; ++i) {
         if (cars[i].done) {
-            if (cars[i].doneReason == DoneReason::Completed)
+            if (i < displayLimit && cars[i].doneReason == DoneReason::Completed)
                 drawCar(cars[i], sf::Color(0, 255, 120, 200)); // green = completed
             continue;
         }
@@ -300,24 +300,27 @@ void Renderer::renderTraining(const TrainingSession& session) {
     drawTrack(session.game().track());
 
     const auto& cars = session.game().cars();
-    int limit = std::min((int)cars.size(), 200);
+    int total = (int)cars.size();
+    int displayLimit = std::min(total, 200); // cap completed/dead cars for performance
 
-    // Find the alive car furthest ahead on track (monotonic, no flicker)
+    // Search ALL cars for the alive car furthest ahead (fixes invisible cars beyond index 200)
     int bestIdx = -1;
     float bestP = -std::numeric_limits<float>::infinity();
-    for (int i = 0; i < limit; ++i) {
+    for (int i = 0; i < total; ++i) {
         if (!cars[i].done && cars[i].maxProgress > bestP) {
             bestP = cars[i].maxProgress;
             bestIdx = i;
         }
     }
 
-    for (int i = 0; i < limit; ++i) {
+    for (int i = 0; i < total; ++i) {
         if (cars[i].done) {
-            if (cars[i].doneReason == DoneReason::Completed)
+            // Only draw completed cars within display limit (performance)
+            if (i < displayLimit && cars[i].doneReason == DoneReason::Completed)
                 drawCar(cars[i], sf::Color(0, 255, 120, 200)); // green = completed lap
             continue;
         }
+        // Always draw alive cars regardless of index
         sf::Color col = (i == bestIdx) ? sf::Color::Yellow : sf::Color(100, 200, 100, 180);
         drawCar(cars[i], col);
     }

@@ -10,17 +10,30 @@
 #include <algorithm>
 #include <limits>
 
+// ---------------------------------------------------------------------------
+// Constructor
+// ---------------------------------------------------------------------------
 TrainingSession::TrainingSession(SimConfig sim,
                                  std::unique_ptr<Trainer> trainer,
                                  int generations,
                                  std::string outDir,
+                                 std::vector<std::string> trainMaps,
+                                 std::vector<std::string> valMaps,
+                                 FitnessAgg agg,
                                  const std::vector<float>* resumeChampion)
     : game_(sim)
     , trainer_(std::move(trainer))
     , generations_(generations)
     , outDir_(std::move(outDir))
     , bestGlobalF_(-std::numeric_limits<float>::infinity())
+    , trainMaps_(std::move(trainMaps))
+    , valMaps_(std::move(valMaps))
+    , agg_(agg)
 {
+    // Fallback: if no train maps supplied, use the map from SimConfig
+    if (trainMaps_.empty())
+        trainMaps_.push_back(sim.map);
+
     NeuralNetwork probe(defaultTopology());
     size_t weightCount = probe.getWeights().size();
 
@@ -29,15 +42,79 @@ TrainingSession::TrainingSession(SimConfig sim,
     else
         trainer_->init((size_t)sim.population, weightCount, sim.seed);
 
+    // Pre-size per-map fitness storage (filled fresh each generation)
+    perMapFitness_.assign(trainMaps_.size(),
+                          std::vector<float>(trainer_->populationSize(), 0.f));
+    mapNorm_.assign(trainMaps_.size(), 1.f);
+
     std::filesystem::create_directories(outDir_);
 }
 
+// ---------------------------------------------------------------------------
+// setMap — public API for the windowed UI
+// ---------------------------------------------------------------------------
 void TrainingSession::setMap(const std::string& path) {
-    game_.loadMap(path);
+    if (trainMaps_.size() == 1) {
+        // Single-map mode: honour the user's selection
+        trainMaps_[0] = path;
+    }
+    // Multi-map mode: restart generation from trainMaps_[0] (path ignored).
     beginGeneration();
 }
 
+// ---------------------------------------------------------------------------
+// Multi-map helpers
+// ---------------------------------------------------------------------------
+float TrainingSession::mapNormConst(const Track& t) const {
+    int numWp = (int)t.waypoints().size();
+    return std::max(1.f, game_.config().reward.w_progress * (float)(numWp - 1));
+}
+
+void TrainingSession::loadTrainMap(size_t idx) {
+    game_.loadMap(trainMaps_[idx]);
+    mapNorm_[idx] = mapNormConst(game_.track());
+}
+
+void TrainingSession::recordCurrentMapFitness() {
+    perMapFitness_[(size_t)currentMapInGen_] = game_.fitnesses();
+}
+
+std::vector<float> TrainingSession::aggregateFitness() const {
+    size_t n = trainer_->populationSize();
+    size_t m = trainMaps_.size();
+    std::vector<float> result(n);
+
+    for (size_t c = 0; c < n; ++c) {
+        if (agg_ == FitnessAgg::Min) {
+            float worst = std::numeric_limits<float>::max();
+            for (size_t mi = 0; mi < m; ++mi) {
+                float score = perMapFitness_[mi][c] / mapNorm_[mi];
+                worst = std::min(worst, score);
+            }
+            result[c] = worst;
+        } else { // Mean
+            float sum = 0.f;
+            for (size_t mi = 0; mi < m; ++mi)
+                sum += perMapFitness_[mi][c] / mapNorm_[mi];
+            result[c] = sum / (float)m;
+        }
+    }
+    return result;
+}
+
+void TrainingSession::advanceIfMapDone() {
+    if (game_.episodeDone() && currentMapInGen_ + 1 < (int)trainMaps_.size()) {
+        recordCurrentMapFitness();
+        ++currentMapInGen_;
+        loadTrainMap((size_t)currentMapInGen_);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core generation loop
+// ---------------------------------------------------------------------------
 void TrainingSession::beginGeneration() {
+    // Build controllers from current generation's weights
     std::vector<std::unique_ptr<AIController>> ctrls;
     ctrls.reserve(trainer_->populationSize());
     for (size_t i = 0; i < trainer_->populationSize(); ++i) {
@@ -46,24 +123,36 @@ void TrainingSession::beginGeneration() {
         ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
     }
     game_.setControllers(std::move(ctrls));
-    game_.reset();
+
+    // Reset per-map storage and start at map 0
+    for (auto& v : perMapFitness_)
+        std::fill(v.begin(), v.end(), 0.f);
+    currentMapInGen_ = 0;
+    loadTrainMap(0); // loadMap -> spawnCars -> ctrl->reset (no-op for NN)
 }
 
 void TrainingSession::tick() {
     game_.tick();
+    advanceIfMapDone();
 }
 
 bool TrainingSession::generationComplete() const {
-    return game_.episodeDone();
+    // True only when the LAST training map's episode is done
+    return currentMapInGen_ == (int)trainMaps_.size() - 1
+        && game_.episodeDone();
 }
 
 void TrainingSession::endGeneration() {
-    auto fitnesses = game_.fitnesses();
-    size_t n = fitnesses.size();
-    for (size_t i = 0; i < n; ++i)
-        trainer_->setFitness(i, fitnesses[i]);
+    // Record last (current) map fitness — earlier maps are recorded in advanceIfMapDone
+    recordCurrentMapFitness();
 
-    // Stats
+    // Aggregate across all training maps
+    auto agg = aggregateFitness();
+    size_t n = agg.size();
+    for (size_t i = 0; i < n; ++i)
+        trainer_->setFitness(i, agg[i]);
+
+    // ---- Stats ----------------------------------------------------------------
     GenerationStats stats;
     stats.generation = currentGen_ + 1;
     stats.population = (int)n;
@@ -72,20 +161,30 @@ void TrainingSession::endGeneration() {
     float sum  = 0.f;
     size_t bestIdx = 0;
     for (size_t i = 0; i < n; ++i) {
-        if (fitnesses[i] > best) { best = fitnesses[i]; bestIdx = i; }
-        sum += fitnesses[i];
+        if (agg[i] > best) { best = agg[i]; bestIdx = i; }
+        sum += agg[i];
     }
     stats.bestFitness = best;
     stats.meanFitness = (n > 0) ? sum / (float)n : 0.f;
+    stats.aggScore    = best;
 
     float var = 0.f;
     for (size_t i = 0; i < n; ++i) {
-        float d = fitnesses[i] - stats.meanFitness;
+        float d = agg[i] - stats.meanFitness;
         var += d * d;
     }
     stats.stdFitness = (n > 0) ? std::sqrt(var / (float)n) : 0.f;
 
-    // Count done reasons
+    // Best normalised score per training map (diagnostic)
+    stats.perMapBest.resize(trainMaps_.size());
+    for (size_t mi = 0; mi < trainMaps_.size(); ++mi) {
+        float mb = -std::numeric_limits<float>::infinity();
+        for (size_t c = 0; c < n; ++c)
+            mb = std::max(mb, perMapFitness_[mi][c] / mapNorm_[mi]);
+        stats.perMapBest[mi] = mb;
+    }
+
+    // Done-reason breakdown from the last map (representative sample)
     for (const auto& car : game_.cars()) {
         switch (car.doneReason) {
             case DoneReason::Completed: ++stats.completed;  break;
@@ -96,7 +195,7 @@ void TrainingSession::endGeneration() {
         }
     }
 
-    // Save generation snapshot
+    // ---- Save generation snapshot (by aggregated score) ----------------------
     {
         std::ostringstream fname;
         fname << outDir_ << "/gen_" << std::setw(4) << std::setfill('0') << stats.generation << ".rnnw";
@@ -117,6 +216,12 @@ void TrainingSession::endGeneration() {
     lastStats_ = stats;
     history_.push_back(stats);
 
+    // ---- Held-out evaluation (every valEvery_ gens and at the last gen) ------
+    bool isLastGen = (currentGen_ + 1 == generations_);
+    bool isValGen  = (!valMaps_.empty()) && ((currentGen_ + 1) % valEvery_ == 0 || isLastGen);
+    if (isValGen)
+        evaluateHeldOut(bestIdx);
+
     trainer_->evolve();
     ++currentGen_;
 }
@@ -125,6 +230,58 @@ bool TrainingSession::done() const {
     return currentGen_ >= generations_;
 }
 
+// ---------------------------------------------------------------------------
+// Held-out validation (champion only, no fitness feedback)
+// ---------------------------------------------------------------------------
+void TrainingSession::evaluateHeldOut(size_t championIdx) {
+    if (valMaps_.empty()) return;
+
+    const auto& champWeights = trainer_->weights(championIdx);
+
+    // Build N copies of the champion controller to match population size
+    {
+        std::vector<std::unique_ptr<AIController>> champCtrls;
+        champCtrls.reserve((size_t)game_.config().population);
+        for (int i = 0; i < game_.config().population; ++i) {
+            NeuralNetwork nn(defaultTopology());
+            nn.setWeights(champWeights);
+            champCtrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
+        }
+        game_.setControllers(std::move(champCtrls));
+    }
+
+    std::cout << "  [held-out gen=" << currentGen_ + 1 << "]\n";
+    for (size_t vi = 0; vi < valMaps_.size(); ++vi) {
+        game_.loadMap(valMaps_[vi]);
+        int numWp = (int)game_.track().waypoints().size();
+        while (!game_.episodeDone()) game_.tick();
+
+        // Car 0 is representative (all are identical copies of the champion)
+        const auto& car = game_.cars()[0];
+        float progFrac = (numWp > 1) ? car.maxProgress / (float)(numWp - 1) : 0.f;
+
+        std::string reason;
+        switch (car.doneReason) {
+            case DoneReason::Completed: reason = "completed"; break;
+            case DoneReason::Collision: reason = "collision"; break;
+            case DoneReason::Stall:     reason = "stall";     break;
+            case DoneReason::Timeout:   reason = "timeout";   break;
+            default:                    reason = "?";         break;
+        }
+
+        auto mapName = std::filesystem::path(valMaps_[vi]).stem().string();
+        std::cout << std::fixed << std::setprecision(3)
+                  << "    val[" << mapName << "]: prog=" << progFrac
+                  << " reason=" << reason << "\n";
+    }
+
+    // Restore first training map so game_ is in a sane state for the next beginGeneration
+    loadTrainMap(0);
+}
+
+// ---------------------------------------------------------------------------
+// runAll (headless)
+// ---------------------------------------------------------------------------
 void TrainingSession::runAll() {
     while (!done()) {
         beginGeneration();
@@ -133,12 +290,22 @@ void TrainingSession::runAll() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// printStats
+// ---------------------------------------------------------------------------
 void TrainingSession::printStats(const GenerationStats& s) const {
-    std::cout << std::fixed << std::setprecision(2)
+    std::cout << std::fixed << std::setprecision(3)
               << "gen " << std::setw(4) << s.generation
               << "/" << generations_
-              << "  best=" << std::setw(8) << s.bestFitness
-              << "  mean=" << std::setw(8) << s.meanFitness
+              << "  agg=" << std::setw(7) << s.aggScore;
+
+    // Per-map breakdown
+    std::cout << " |";
+    for (size_t mi = 0; mi < s.perMapBest.size(); ++mi)
+        std::cout << " m" << mi << "=" << std::setw(6) << s.perMapBest[mi];
+    std::cout << " |";
+
+    std::cout << "  mean=" << std::setw(7) << s.meanFitness
               << "  std="  << std::setw(6) << s.stdFitness
               << "  done=" << s.completed << "/" << s.population
               << "  [col=" << s.nCollision

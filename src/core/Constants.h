@@ -2,7 +2,7 @@
 
 constexpr int   SIM_HZ          = 60;
 constexpr float DT              = 1.f / SIM_HZ;
-constexpr int   NUM_RAYS        = 7;
+constexpr int   NUM_RAYS        = 13;
 constexpr float RAY_MAX_LEN     = 400.f;
 constexpr float MAX_SPEED         = 400.f;
 // Maximum reverse speed (px/s). 0 = reverse fully disabled (negative throttle acts as pure brake).
@@ -19,7 +19,7 @@ constexpr float STALL_SPEED        = 4.f;    // px/s — below this counts as st
 constexpr float STALL_PROGRESS_MIN = 0.05f;  // min waypoint advance to reset stall timer (blocks spin-in-place)
 // inputs: rays[0..NUM_RAYS-1], speed, angle_to_wp, dist_to_wp, angle_to_wp2,
 //         then 5x (curvature_Nahead, speed_excess_Nahead) for N=1..5
-constexpr int   OBS_SIZE        = NUM_RAYS + 14; // 21
+constexpr int   OBS_SIZE        = NUM_RAYS + 14; // 27 with NUM_RAYS=13
 constexpr int   NN_HIDDEN       = 32;
 constexpr int   ACT_SIZE        = 2;
 constexpr float CAR_LENGTH      = 20.f;

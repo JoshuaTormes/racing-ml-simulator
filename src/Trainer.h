@@ -13,6 +13,9 @@ struct GenerationStats {
     int   nCollision  = 0;
     int   nStall      = 0;
     int   nTimeout    = 0;
+    // Multi-map aggregation
+    float aggScore    = 0.f;              // min-normalised score of best genome
+    std::vector<float> perMapBest;        // best normalised score per training map
 };
 
 class Trainer {
