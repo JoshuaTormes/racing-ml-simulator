@@ -7,6 +7,18 @@
 
 inline std::vector<int> defaultTopology() { return {OBS_SIZE, NN_HIDDEN, ACT_SIZE}; }
 
+// Set NN_HIDDEN at startup (before any NeuralNetwork construction). Call at most once.
+void setHiddenSize(int h);
+
+// Returns the hidden layer size H that satisfies:
+//   OBS_SIZE*H + H + H*ACT_SIZE + ACT_SIZE == weightCount
+// Returns -1 if no positive integer H satisfies the equation.
+int inferHiddenFromWeights(size_t weightCount);
+
+// Returns the topology stored in a .rnnw file without loading weights.
+// Throws std::runtime_error on invalid file or version mismatch.
+std::vector<int> readTopologyFromFile(const std::string& path);
+
 // Feedforward MLP, no external libs. Activation: tanh everywhere.
 class NeuralNetwork {
 public:

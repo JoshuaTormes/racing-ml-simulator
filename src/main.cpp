@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <sstream>
+#include <stdexcept>
 
 static std::vector<std::string> listMaps(const std::string& dir) {
     std::vector<std::string> v;
@@ -30,7 +31,6 @@ static int findMapIndex(const std::vector<std::string>& maps, const std::string&
     return 0;
 }
 
-// Split a comma-separated string into tokens
 static std::vector<std::string> splitComma(const std::string& s) {
     std::vector<std::string> out;
     std::istringstream ss(s);
@@ -58,19 +58,55 @@ static void printUsage(const char* argv0) {
         << "  --load <file.rnnw>    With --train: seed population from champion. Without: watch the network\n"
         << "  --watch <file.rnnw>   Watch a saved network drive (no training)\n"
         << "  --versus <file.rnnw>  Human (↑↓←→ / WASD) vs saved network. Yellow = you, green = AI\n"
-        << "\nMulti-map generalisation\n"
+        << "\nMulti-map training & robustness\n"
         << "  --train-maps <a,b,..> Comma-separated list of training maps\n"
         << "  --val-maps <x,y>      Comma-separated held-out maps (not used in selection)\n"
-        << "  --fitness-agg <mode>  Aggregation: min (default) | mean\n"
+        << "  --fitness-agg <mode>  Aggregation: cvar-rank (default) | min | mean | cvar-raw\n"
+        << "  --cvar-alpha <α>      CVaR tail fraction in (0,1] (default: 0.5). Used with cvar-rank/cvar-raw\n"
+        << "  --map-norm <mode>     Per-map normalisation: zscore (default) | minmax | progress\n"
+        << "                        Ignored under cvar-rank (ranks are scale-invariant)\n"
+        << "  --curriculum <mode>   Map curriculum: linear (default) | none | explicit\n"
+        << "  --curriculum-start <k>  Initial active map count for linear (default: 2)\n"
+        << "  --curriculum-step <g>   Gens between additions for linear (default: 15)\n"
+        << "  --curriculum-schedule <g1,g2,...>  Gen thresholds for explicit (M-1 values)\n"
+        << "  --hidden <N>          Hidden layer size override (default: 32)\n"
+        << "  --log-csv             Write training_log.csv and held_out_log.csv to --out dir\n"
         << "\n  Default when --train is active and no --train-maps is given:\n"
         << "    all *.json in maps/, sorted; first 6 = train, last 2 = val (reproducible split).\n"
-        << "  Single-map compat: --map without --train-maps trains only on that map.\n";
+        << "  Single-map compat: --map without --train-maps trains only on that map.\n"
+        << "\n  Baseline (old behaviour) reproducible with:\n"
+        << "    --fitness-agg min --map-norm progress --curriculum none\n";
 }
 
 static std::vector<float> loadChampion(const std::string& path) {
     NeuralNetwork nn(defaultTopology());
     nn.load(path);
     return nn.getWeights();
+}
+
+static FitnessAgg parseAgg(const std::string& s) {
+    if (s == "cvar-rank") return FitnessAgg::CVaRRank;
+    if (s == "min")       return FitnessAgg::Min;
+    if (s == "mean")      return FitnessAgg::Mean;
+    if (s == "cvar-raw")  return FitnessAgg::CVaRRaw;
+    throw std::runtime_error("Invalid --fitness-agg value: " + s +
+                             ". Valid: cvar-rank | min | mean | cvar-raw");
+}
+
+static MapNormMode parseNorm(const std::string& s) {
+    if (s == "zscore")   return MapNormMode::ZScore;
+    if (s == "minmax")   return MapNormMode::MinMax;
+    if (s == "progress") return MapNormMode::Progress;
+    throw std::runtime_error("Invalid --map-norm value: " + s +
+                             ". Valid: zscore | minmax | progress");
+}
+
+static CurriculumMode parseCurriculum(const std::string& s) {
+    if (s == "none")     return CurriculumMode::None;
+    if (s == "linear")   return CurriculumMode::Linear;
+    if (s == "explicit") return CurriculumMode::Explicit;
+    throw std::runtime_error("Invalid --curriculum value: " + s +
+                             ". Valid: none | linear | explicit");
 }
 
 int main(int argc, char* argv[]) {
@@ -84,35 +120,115 @@ int main(int argc, char* argv[]) {
     std::string loadPath;
     std::string watchPath;
     std::string versusPath;
-    std::string trainMapsArg;  // raw comma-separated string
+    std::string trainMapsArg;
     std::string valMapsArg;
-    std::string fitnessAggArg = "min";
-    bool explicitMap     = false;  // user passed --map
-    bool explicitTrainMaps = false;
+    bool explicitMap        = false;
+    bool explicitTrainMaps  = false;
+
+    // Multi-map robustness flags
+    std::string fitnessAggArg   = "cvar-rank";
+    float       cvarAlpha       = 0.5f;
+    std::string mapNormArg      = "zscore";
+    std::string curriculumArg   = "linear";
+    int         currStart       = 2;
+    int         currStep        = 15;
+    std::string currScheduleArg;
+    int         hiddenOverride  = -1;  // -1 = not specified
+    bool        logCsv          = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if      (arg == "--headless")                    cfg.headless    = true;
-        else if (arg == "--benchmark")                   { benchmark = true; cfg.headless = true; }
-        else if (arg == "--train")                       train           = true;
-        else if (arg == "--map"          && i+1 < argc)  { cfg.map = argv[++i]; explicitMap = true; }
-        else if (arg == "--population"   && i+1 < argc)  cfg.population  = std::stoi(argv[++i]);
-        else if (arg == "--seed"         && i+1 < argc)  cfg.seed        = (unsigned)std::stoul(argv[++i]);
-        else if (arg == "--threads"      && i+1 < argc)  cfg.threads     = std::stoi(argv[++i]);
-        else if (arg == "--algo"         && i+1 < argc)  algo            = argv[++i];
-        else if (arg == "--generations"  && i+1 < argc)  generations     = std::stoi(argv[++i]);
-        else if (arg == "--out"          && i+1 < argc)  outDir          = argv[++i];
-        else if (arg == "--load"         && i+1 < argc)  loadPath        = argv[++i];
-        else if (arg == "--watch"        && i+1 < argc)  watchPath       = argv[++i];
-        else if (arg == "--versus"       && i+1 < argc)  versusPath      = argv[++i];
-        else if (arg == "--train-maps"   && i+1 < argc)  { trainMapsArg = argv[++i]; explicitTrainMaps = true; }
-        else if (arg == "--val-maps"     && i+1 < argc)  valMapsArg      = argv[++i];
-        else if (arg == "--fitness-agg"  && i+1 < argc)  fitnessAggArg   = argv[++i];
-        else if (arg == "--help" || arg == "-h")         showHelp        = true;
-        else { std::cerr << "Unknown option: " << arg << "\n"; showHelp = true; }
+        try {
+            if      (arg == "--headless")                    cfg.headless    = true;
+            else if (arg == "--benchmark")                   { benchmark = true; cfg.headless = true; }
+            else if (arg == "--train")                       train           = true;
+            else if (arg == "--map"          && i+1 < argc)  { cfg.map = argv[++i]; explicitMap = true; }
+            else if (arg == "--population"   && i+1 < argc)  cfg.population  = std::stoi(argv[++i]);
+            else if (arg == "--seed"         && i+1 < argc)  cfg.seed        = (unsigned)std::stoul(argv[++i]);
+            else if (arg == "--threads"      && i+1 < argc)  cfg.threads     = std::stoi(argv[++i]);
+            else if (arg == "--algo"         && i+1 < argc)  algo            = argv[++i];
+            else if (arg == "--generations"  && i+1 < argc)  generations     = std::stoi(argv[++i]);
+            else if (arg == "--out"          && i+1 < argc)  outDir          = argv[++i];
+            else if (arg == "--load"         && i+1 < argc)  loadPath        = argv[++i];
+            else if (arg == "--watch"        && i+1 < argc)  watchPath       = argv[++i];
+            else if (arg == "--versus"       && i+1 < argc)  versusPath      = argv[++i];
+            else if (arg == "--train-maps"   && i+1 < argc)  { trainMapsArg = argv[++i]; explicitTrainMaps = true; }
+            else if (arg == "--val-maps"     && i+1 < argc)  valMapsArg      = argv[++i];
+            else if (arg == "--fitness-agg"  && i+1 < argc)  fitnessAggArg   = argv[++i];
+            else if (arg == "--cvar-alpha"   && i+1 < argc)  cvarAlpha       = std::stof(argv[++i]);
+            else if (arg == "--map-norm"     && i+1 < argc)  mapNormArg      = argv[++i];
+            else if (arg == "--curriculum"   && i+1 < argc)  curriculumArg   = argv[++i];
+            else if (arg == "--curriculum-start" && i+1 < argc)  currStart   = std::stoi(argv[++i]);
+            else if (arg == "--curriculum-step"  && i+1 < argc)  currStep    = std::stoi(argv[++i]);
+            else if (arg == "--curriculum-schedule" && i+1 < argc) currScheduleArg = argv[++i];
+            else if (arg == "--hidden"       && i+1 < argc)  hiddenOverride  = std::stoi(argv[++i]);
+            else if (arg == "--log-csv")                      logCsv         = true;
+            else if (arg == "--help" || arg == "-h")          showHelp       = true;
+            else { std::cerr << "Unknown option: " << arg << "\n"; showHelp = true; }
+        } catch (const std::exception& e) {
+            std::cerr << "Error parsing " << arg << ": " << e.what() << "\n";
+            return 1;
+        }
     }
 
     if (showHelp) { printUsage(argv[0]); return 0; }
+
+    // ---- Validate and parse multi-map config --------------------------------
+    FitnessAgg   fitnessAgg = FitnessAgg::CVaRRank;
+    MapNormMode  mapNorm    = MapNormMode::ZScore;
+    CurriculumMode currMode = CurriculumMode::Linear;
+
+    try {
+        fitnessAgg = parseAgg(fitnessAggArg);
+        mapNorm    = parseNorm(mapNormArg);
+        currMode   = parseCurriculum(curriculumArg);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        return 1;
+    }
+
+    if (cvarAlpha <= 0.f || cvarAlpha > 1.f) {
+        std::cerr << "--cvar-alpha must be in (0, 1], got " << cvarAlpha << "\n";
+        return 1;
+    }
+
+    // Warn if map-norm non-default but will be ignored under cvar-rank
+    if (fitnessAgg == FitnessAgg::CVaRRank && mapNorm != MapNormMode::ZScore)
+        std::cerr << "[warn] --map-norm is ignored under cvar-rank aggregation\n";
+
+    // ---- Resolve --hidden and --load ----------------------------------------
+    // Must be done before any NeuralNetwork construction.
+    if (!loadPath.empty()) {
+        // Read topology from saved file to detect hidden size
+        std::vector<int> topo;
+        try {
+            topo = readTopologyFromFile(loadPath);
+        } catch (const std::exception& e) {
+            std::cerr << "Cannot read " << loadPath << ": " << e.what() << "\n";
+            return 1;
+        }
+        int fileH = (topo.size() >= 3) ? topo[1] : -1;
+
+        if (hiddenOverride >= 0) {
+            if (hiddenOverride != fileH) {
+                std::cerr << "--hidden " << hiddenOverride
+                          << " conflicts with champion hidden size " << fileH
+                          << " in " << loadPath << "\n";
+                return 1;
+            }
+            setHiddenSize(hiddenOverride);
+        } else {
+            // Auto-detect from file topology
+            if (fileH <= 0) {
+                std::cerr << "Cannot infer hidden size from " << loadPath
+                          << " (topology has " << topo.size() << " layers)\n";
+                return 1;
+            }
+            setHiddenSize(fileH);
+        }
+    } else if (hiddenOverride >= 0) {
+        setHiddenSize(hiddenOverride);
+    }
 
     // ---- benchmark ----
     if (benchmark) {
@@ -172,12 +288,12 @@ int main(int argc, char* argv[]) {
 #endif
     };
 
-    // ---- versus: human (car 0) vs loaded NN (car 1) ----
+    // ---- versus ----
     auto runVersus = [&](const std::string& path) {
 #ifndef HEADLESS_ONLY
         std::vector<float> w = loadChampion(path);
         SimConfig vcfg = cfg;
-        vcfg.population = 2;  // car 0 = you (yellow), car 1 = AI (green)
+        vcfg.population = 2;
         Game game(vcfg);
         {
             NeuralNetwork nn(defaultTopology());
@@ -231,7 +347,7 @@ int main(int argc, char* argv[]) {
 
     // ---- training ----
     if (train) {
-        // ----- Resolve train/val map lists ----------------------------------
+        // ----- Resolve train/val map lists -----------------------------------
         std::vector<std::string> trainMaps;
         std::vector<std::string> valMaps;
 
@@ -240,13 +356,10 @@ int main(int argc, char* argv[]) {
             if (!valMapsArg.empty())
                 valMaps = splitComma(valMapsArg);
         } else if (explicitMap) {
-            // Single-map compat: train only on the specified map
             trainMaps = { cfg.map };
-            // val-maps still honoured if explicitly given
             if (!valMapsArg.empty())
                 valMaps = splitComma(valMapsArg);
         } else {
-            // Default: auto split from maps/ directory (6 train / 2 val)
             auto allMaps = listMaps("maps");
             if (allMaps.size() >= 3) {
                 size_t nVal   = std::min((size_t)2, allMaps.size() / 4);
@@ -256,8 +369,7 @@ int main(int argc, char* argv[]) {
             } else {
                 trainMaps = allMaps;
             }
-
-            if (!valMapsArg.empty())  // explicit --val-maps overrides the auto split
+            if (!valMapsArg.empty())
                 valMaps = splitComma(valMapsArg);
         }
 
@@ -266,14 +378,44 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // ----- Resolve fitness aggregation ----------------------------------
-        FitnessAgg agg = FitnessAgg::Min;
-        if (fitnessAggArg == "mean") agg = FitnessAgg::Mean;
+        // ----- Validate curriculum-schedule ----------------------------------
+        CurriculumConfig currCfg;
+        currCfg.mode  = currMode;
+        currCfg.start = currStart;
+        currCfg.step  = currStep;
 
-        // ----- Print config summary -----------------------------------------
+        if (currMode == CurriculumMode::Explicit) {
+            if (currScheduleArg.empty()) {
+                std::cerr << "--curriculum explicit requires --curriculum-schedule <g1,g2,...>\n";
+                return 1;
+            }
+            auto tokens = splitComma(currScheduleArg);
+            int expected = (int)trainMaps.size() - 1;
+            if ((int)tokens.size() != expected) {
+                std::cerr << "--curriculum-schedule must have exactly M-1=" << expected
+                          << " values for " << trainMaps.size() << " train maps; got "
+                          << tokens.size() << "\n";
+                return 1;
+            }
+            for (const auto& tok : tokens)
+                currCfg.schedule.push_back(std::stoi(tok));
+        }
+
+        // ----- Build MultiMapConfig ------------------------------------------
+        MultiMapConfig mmCfg;
+        mmCfg.fitnessAgg  = fitnessAgg;
+        mmCfg.cvarAlpha   = cvarAlpha;
+        mmCfg.mapNorm     = mapNorm;
+        mmCfg.curriculum  = currCfg;
+
+        // ----- Print config summary ------------------------------------------
+        std::string aggName = fitnessAggArg;
+        if (fitnessAgg == FitnessAgg::CVaRRank || fitnessAgg == FitnessAgg::CVaRRaw)
+            aggName += " α=" + std::to_string(cvarAlpha);
         std::cout << "Training: " << trainMaps.size() << " train map(s)";
         if (!valMaps.empty()) std::cout << ", " << valMaps.size() << " val map(s)";
-        std::cout << " | agg=" << (agg == FitnessAgg::Min ? "min" : "mean")
+        std::cout << " | agg=" << aggName
+                  << " | curriculum=" << curriculumArg
                   << " | pop=" << cfg.population
                   << " | gen=" << generations << "\n";
         for (size_t i = 0; i < trainMaps.size(); ++i)
@@ -281,7 +423,7 @@ int main(int argc, char* argv[]) {
         for (size_t i = 0; i < valMaps.size(); ++i)
             std::cout << "  val["   << i << "]: " << valMaps[i]   << "\n";
 
-        // ----- Champion seed ------------------------------------------------
+        // ----- Champion seed -------------------------------------------------
         const std::vector<float>* champion = nullptr;
         std::vector<float> championWeights;
         if (!loadPath.empty()) {
@@ -290,23 +432,19 @@ int main(int argc, char* argv[]) {
         }
 
         if (cfg.headless) {
-            // Headless training
             TrainingSession session(cfg, makeTrainer(algo), generations, outDir,
-                                    trainMaps, valMaps, agg, champion);
+                                    trainMaps, valMaps, mmCfg, champion, logCsv);
             session.runAll();
             return 0;
         }
 
 #ifndef HEADLESS_ONLY
-        // Windowed training
         bool multiMap = (trainMaps.size() > 1);
         TrainingSession session(cfg, makeTrainer(algo), generations, outDir,
-                                trainMaps, valMaps, agg, champion);
+                                trainMaps, valMaps, mmCfg, champion, logCsv);
         Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
 
         {
-        // For single-map mode the user can cycle through maps; in multi-map mode
-        // the session drives the map sequence automatically — consumeMapDelta is ignored.
         auto mapDir = std::filesystem::path(cfg.map).parent_path().string();
         auto maps = listMaps(mapDir);
         int idx = findMapIndex(maps, cfg.map);
@@ -325,7 +463,6 @@ int main(int argc, char* argv[]) {
                 accumulator = 0.f;
                 prev = Clock::now();
             }
-            // Map cycling: only meaningful in single-map training
             if (!multiMap) {
                 if (int d = renderer.consumeMapDelta(); d && !maps.empty()) {
                     idx = (idx + d + (int)maps.size()) % (int)maps.size();
@@ -334,7 +471,7 @@ int main(int argc, char* argv[]) {
                     prev = Clock::now();
                 }
             } else {
-                renderer.consumeMapDelta(); // consume and discard
+                renderer.consumeMapDelta();
             }
 
             auto now = Clock::now();
@@ -357,12 +494,11 @@ int main(int argc, char* argv[]) {
 
             renderer.renderTraining(session);
         }
-        // Keep window open showing final state
         while (renderer.isOpen()) {
             if (!renderer.handleEvents()) break;
             renderer.renderTraining(session);
         }
-        } // maps scope
+        }
 #endif
         return 0;
     }
@@ -375,7 +511,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // ---- windowed default: car 0 by keyboard, rest by NN ----
+    // ---- windowed default ----
 #ifndef HEADLESS_ONLY
     Game game(cfg);
     {
@@ -425,7 +561,7 @@ int main(int argc, char* argv[]) {
 
         renderer.render(game, /*showRays=*/true);
     }
-    } // maps scope
+    }
 #endif
 
     return 0;

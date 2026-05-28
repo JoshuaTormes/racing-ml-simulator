@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <fstream>
 
 #include "core/Vec2.h"
 #include "core/Constants.h"
@@ -16,6 +17,7 @@
 #include "GeneticAlgorithm.h"
 #include "Trainers.h"
 #include "Training.h"
+#include "TrainingMath.h"
 #include <filesystem>
 
 // Lightweight test framework
@@ -81,6 +83,82 @@ static void test_track_geometry() {
     ASSERT(!track.leftBorder().empty());
     ASSERT(!track.rightBorder().empty());
     ASSERT(track.leftBorder().size() == track.rightBorder().size());
+
+    // After Catmull-Rom densification, map1 has 8 design waypoints and the centerline
+    // contains at least 8 × CENTERLINE_SUBSEGMENTS points (plus the closure point).
+    ASSERT(track.designWaypoints().size() == 8);
+    ASSERT((int)track.centerline().size() >= 8 * CENTERLINE_SUBSEGMENTS);
+    ASSERT(track.totalArcLength() > 0.f);
+}
+
+// ---------- Centerline interpolates through design waypoints ----------
+static void test_centerline_passes_through_waypoints() {
+    for (const std::string& path : {"maps/map1.json", "maps/map6_chicanes_infernais.json"}) {
+        Track track(path);
+        const auto& dwps = track.designWaypoints();
+        const auto& center = track.centerline();
+        for (auto& wp : dwps) {
+            float bestD = std::numeric_limits<float>::infinity();
+            for (auto& c : center)
+                bestD = std::min(bestD, (c - wp).length());
+            // The construction places centerline_[k * N] == designWaypoints_[k], so the
+            // tolerance is dominated by float precision (< 0.5 px is generous).
+            ASSERT(bestD < 0.5f);
+        }
+    }
+}
+
+// ---------- Arc length is monotonic and consistent ----------
+static void test_arc_length_monotonic() {
+    Track track("maps/map1.json");
+    const auto& arc = track.arcLength();
+    ASSERT(arc.size() >= 2);
+    for (size_t i = 1; i < arc.size(); ++i)
+        ASSERT(arc[i] >= arc[i - 1]);
+    ASSERT(std::fabs(arc.back() - track.totalArcLength()) < 1e-3f);
+}
+
+// ---------- Projection is idempotent on centerline samples ----------
+static void test_projection_idempotent() {
+    Track track("maps/map1.json");
+    float L = track.totalArcLength();
+    ASSERT(L > 0.f);
+
+    // Sample 50 points along the centerline; each projection must round-trip
+    // through updateProjection to within ~1px of the original arc.
+    for (int i = 0; i < 50; ++i) {
+        float arc = L * (float)i / 50.f;
+        Vec2 p = track.centerlineAtArc(arc);
+        ProjectionState st;
+        // Seed segment near the expected arc so local search starts close — the
+        // production path always carries state across ticks.
+        st.segIdx = (int)((float)i / 50.f * (track.centerline().size() - 1));
+        track.updateProjection(p, st);
+        float err = std::fabs(st.arcLen - arc);
+        // Closed-loop wrap: the spawn point matches itself at arc=0 and arc=L.
+        err = std::min(err, std::fabs(err - L));
+        ASSERT(err < 1.0f);
+    }
+}
+
+// ---------- Projection state segIdx tracks forward motion ----------
+static void test_projection_local_search() {
+    Track track("maps/map1.json");
+    ProjectionState st;
+    float L = track.totalArcLength();
+    int prevSeg = st.segIdx;
+    int decreased = 0;
+    // Walk along the centerline in arc-length steps, simulating a moving car.
+    for (int i = 1; i <= 50; ++i) {
+        float arc = L * (float)i / 50.f;
+        Vec2 p = track.centerlineAtArc(arc);
+        track.updateProjection(p, st);
+        // Monotone forward in segment index, except for at most one wrap (closed map).
+        if (st.segIdx < prevSeg) ++decreased;
+        prevSeg = st.segIdx;
+    }
+    // At most one drop allowed (the wrap-around at the end of a closed loop).
+    ASSERT(decreased <= 1);
 }
 
 // ---------- Sensor ----------
@@ -444,16 +522,19 @@ static void test_regress_penalty() {
     // At peak, regressPenalty should be 0 (car is at or ahead of max)
     ASSERT(car.regressPenalty >= 0.f);
 
-    // Record fitness at peak — the w_regress term must not penalise forward driving
+    // Fitness formula: w_progress * maxProgress + speedBonus + checkpointBonus
+    //                  - reversePenalty - regressPenalty - curvePenalty
     float fitnessAtPeak = car.fitness;
-    ASSERT(std::fabs(fitnessAtPeak - (cfg.w_progress * peakProgress - car.regressPenalty)) < 1e-3f);
+    float expected = cfg.w_progress * peakProgress
+                   + car.speedBonus + car.checkpointBonus
+                   - car.reversePenalty - car.regressPenalty - car.curvePenalty;
+    ASSERT(std::fabs(fitnessAtPeak - expected) < 1e-3f);
 
-    // Now verify that regressPenalty is non-negative (it can only grow when behind peak)
-    // Drive backward is blocked by MAX_REVERSE_SPEED=0, but the progress itself can decrease
-    // if the car turns away from waypoints — we just verify the invariant holds:
+    // regressPenalty stays non-negative (can only grow when behind peak)
     ASSERT(car.regressPenalty >= 0.f);
-    // fitness formula: fitness = w_progress * maxProgress - regressPenalty
-    ASSERT(car.fitness <= cfg.w_progress * car.maxProgress + 1e-3f);
+    // fitness must not exceed progress + bonuses (penalties only subtract)
+    float upperBound = cfg.w_progress * car.maxProgress + car.speedBonus + car.checkpointBonus;
+    ASSERT(car.fitness <= upperBound + 1e-3f);
 }
 
 // ---------- Stall by no-progress (task D) ----------
@@ -513,6 +594,206 @@ static void test_game_episode_terminates() {
     ASSERT(secs < 60.0); // must finish within real-time budget
 }
 
+// ---------- T1: CVaRRank(α=1) produces score ∈ [0,1] with mean ≈ 0.5 ----------
+static void test_cvar_rank_mean() {
+    using namespace training_math;
+    // 2 maps, 5 cars — synthetic fitness
+    std::vector<float> fA = {10.f, 3.f, 7.f, 1.f, 5.f};
+    std::vector<float> fB = { 2.f, 8.f, 4.f, 9.f, 6.f};
+    auto rA = normalized_ranks(fA);
+    auto rB = normalized_ranks(fB);
+
+    float sum = 0.f;
+    for (size_t c = 0; c < 5; ++c) {
+        std::vector<float> ranks = {rA[c], rB[c]};
+        float score = cvar(ranks, 1.0f);
+        ASSERT(score >= 0.f && score <= 1.f + 1e-5f);
+        sum += score;
+    }
+    float mean = sum / 5.f;
+    ASSERT(std::fabs(mean - 0.5f) < 0.05f);
+}
+
+// ---------- T2: CVaRRank invariant to monotonic per-map transformation ----------
+static void test_cvar_rank_invariance() {
+    using namespace training_math;
+    std::vector<float> fA = {1.f, 5.f, 3.f, 2.f, 4.f};
+    std::vector<float> fB = {9.f, 2.f, 6.f, 8.f, 3.f};
+
+    // Compute scores on original fitnesses
+    auto rA1 = normalized_ranks(fA);
+    auto rB1 = normalized_ranks(fB);
+    std::vector<float> scores1(5);
+    for (size_t c = 0; c < 5; ++c)
+        scores1[c] = cvar({rA1[c], rB1[c]}, 0.5f);
+
+    // Apply monotonic transformation: f' = a*f + b per map (a > 0)
+    std::vector<float> fA2(5), fB2(5);
+    for (size_t i = 0; i < 5; ++i) {
+        fA2[i] = 3.f * fA[i] + 7.f;
+        fB2[i] = std::exp(fB[i]);
+    }
+    auto rA2 = normalized_ranks(fA2);
+    auto rB2 = normalized_ranks(fB2);
+    std::vector<float> scores2(5);
+    for (size_t c = 0; c < 5; ++c)
+        scores2[c] = cvar({rA2[c], rB2[c]}, 0.5f);
+
+    for (size_t c = 0; c < 5; ++c)
+        ASSERT(std::fabs(scores1[c] - scores2[c]) < 1e-5f);
+}
+
+// ---------- T3: CVaR limits ----------
+static void test_cvar_limits() {
+    using namespace training_math;
+    std::vector<float> x = {4.f, 1.f, 3.f, 2.f}; // M=4
+
+    // CVaR(α=1) == mean
+    float m = (4.f + 1.f + 3.f + 2.f) / 4.f;
+    ASSERT(std::fabs(cvar(x, 1.0f) - m) < 1e-5f);
+
+    // CVaR(α=1/M) == min
+    ASSERT(std::fabs(cvar(x, 0.25f) - 1.f) < 1e-5f);
+
+    // CVaR(α=0.5) == mean of 2 smallest
+    ASSERT(std::fabs(cvar(x, 0.5f) - 1.5f) < 1e-5f);
+
+    // Ranks: for single map with P=4, CVaRRank(α=1) == mean of ranks == 0.5
+    std::vector<float> f4 = {10.f, 5.f, 8.f, 3.f};
+    auto ranks = normalized_ranks(f4);
+    float rankSum = 0.f;
+    for (float r : ranks) rankSum += r;
+    ASSERT(std::fabs(rankSum / 4.f - 0.5f) < 1e-5f);
+}
+
+// ---------- T4: Z-score produces μ≈0, σ≈1 ----------
+static void test_zscore_normalization() {
+    using namespace training_math;
+    std::vector<float> f = {1.f, 2.f, 3.f, 4.f, 5.f};
+    auto norm = normalize_zscore(f);
+    ASSERT(norm.size() == 5);
+
+    float mu = 0.f;
+    for (float v : norm) mu += v;
+    mu /= 5.f;
+    ASSERT(std::fabs(mu) < 1e-4f);
+
+    float var = 0.f;
+    for (float v : norm) { float d = v - mu; var += d*d; }
+    float sigma = std::sqrt(var / 5.f);
+    ASSERT(std::fabs(sigma - 1.f) < 1e-4f);
+}
+
+// ---------- T5: Linear curriculum activates correct count per gen ----------
+static void test_curriculum_linear() {
+    using namespace training_math;
+    CurriculumConfig cfg;
+    cfg.mode  = CurriculumMode::Linear;
+    cfg.start = 2;
+    cfg.step  = 15;
+
+    ASSERT(active_map_count(0,  6, cfg) == 2);
+    ASSERT(active_map_count(14, 6, cfg) == 2);
+    ASSERT(active_map_count(15, 6, cfg) == 3);
+    ASSERT(active_map_count(29, 6, cfg) == 3);
+    ASSERT(active_map_count(30, 6, cfg) == 4);
+    ASSERT(active_map_count(90, 6, cfg) == 6);  // capped at total=6
+    ASSERT(active_map_count(0,  1, cfg) == 1);  // single-map: always 1
+
+    // None mode
+    CurriculumConfig none;
+    none.mode = CurriculumMode::None;
+    ASSERT(active_map_count(0,  6, none) == 6);
+
+    // Explicit mode
+    CurriculumConfig expl;
+    expl.mode = CurriculumMode::Explicit;
+    expl.schedule = {10, 20, 30}; // M=4, M-1=3 thresholds
+    ASSERT(active_map_count(0,  4, expl) == 1);
+    ASSERT(active_map_count(9,  4, expl) == 1);
+    ASSERT(active_map_count(10, 4, expl) == 2);
+    ASSERT(active_map_count(25, 4, expl) == 3);
+    ASSERT(active_map_count(30, 4, expl) == 4);
+}
+
+// ---------- T6: setHiddenSize + inferHiddenFromWeights ----------
+static void test_hidden_size() {
+    int origH = NN_HIDDEN;
+
+    setHiddenSize(64);
+    NeuralNetwork nn(defaultTopology());
+    // OBS_SIZE*64 + 64 + 64*ACT_SIZE + ACT_SIZE = 26*64 + 64 + 64*2 + 2 = 1858
+    ASSERT(nn.getWeights().size() == 1858);
+
+    ASSERT(inferHiddenFromWeights(1858) == 64);
+    // H=32: 26*32 + 32 + 32*2 + 2 = 930
+    ASSERT(inferHiddenFromWeights(930)  == 32);
+    // Invalid: (999-2)/29 is not integer
+    ASSERT(inferHiddenFromWeights(999)  == -1);
+    ASSERT(inferHiddenFromWeights(0)    == -1);
+
+    // Restore
+    setHiddenSize(origH);
+    ASSERT(NN_HIDDEN == origH);
+}
+
+// ---------- T7: Determinism across two sequential runAll() calls ----------
+static void test_training_determinism() {
+    SimConfig cfg;
+    cfg.population = 10;
+    cfg.headless   = true;
+    cfg.threads    = 1;
+    cfg.seed       = 7;
+
+    auto tmpBase = (std::filesystem::temp_directory_path() / "racing_ml_det_test").string();
+
+    // Test each aggregator with curriculum=none for simplicity
+    struct AggCase { FitnessAgg agg; MapNormMode norm; };
+    std::vector<AggCase> cases = {
+        { FitnessAgg::CVaRRank, MapNormMode::ZScore    },
+        { FitnessAgg::Min,      MapNormMode::Progress  },
+        { FitnessAgg::Mean,     MapNormMode::ZScore    },
+        { FitnessAgg::CVaRRaw,  MapNormMode::ZScore    },
+    };
+
+    auto loadBytes = [](const std::string& path) {
+        std::ifstream f(path, std::ios::binary);
+        return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), {});
+    };
+
+    for (const auto& ac : cases) {
+        std::string dir1 = tmpBase + "/det1";
+        std::string dir2 = tmpBase + "/det2";
+        std::filesystem::remove_all(dir1);
+        std::filesystem::remove_all(dir2);
+
+        MultiMapConfig mmcfg;
+        mmcfg.fitnessAgg       = ac.agg;
+        mmcfg.mapNorm          = ac.norm;
+        mmcfg.curriculum.mode  = CurriculumMode::None;
+
+        {
+            TrainingSession s1(cfg, makeTrainer("genetic"), 3, dir1,
+                               {"maps/map1.json"}, {}, mmcfg);
+            TrainingSession s2(cfg, makeTrainer("genetic"), 3, dir2,
+                               {"maps/map1.json"}, {}, mmcfg);
+            s1.runAll();
+            s2.runAll();
+        }
+
+        auto b1 = loadBytes(dir1 + "/best.rnnw");
+        auto b2 = loadBytes(dir2 + "/best.rnnw");
+        ASSERT(b1.size() > 0 && b1.size() == b2.size());
+        bool match = (b1 == b2);
+        if (!match) {
+            std::cerr << "  Determinism fail for agg=" << (int)ac.agg << "\n";
+        }
+        ASSERT(match);
+
+        std::filesystem::remove_all(tmpBase);
+    }
+}
+
 int main() {
     std::cout << "=== Racing ML Sim Tests ===\n";
 
@@ -521,6 +802,18 @@ int main() {
 
     test_track_geometry();
     std::cout << "Track geometry: ok\n";
+
+    test_centerline_passes_through_waypoints();
+    std::cout << "Centerline passes through waypoints: ok\n";
+
+    test_arc_length_monotonic();
+    std::cout << "Arc length monotonic: ok\n";
+
+    test_projection_idempotent();
+    std::cout << "Projection idempotent: ok\n";
+
+    test_projection_local_search();
+    std::cout << "Projection local search: ok\n";
 
     test_sensor();
     std::cout << "Sensor: ok\n";
@@ -566,6 +859,27 @@ int main() {
 
     test_stall_by_no_progress();
     std::cout << "Stall by no-progress (task D): ok\n";
+
+    test_cvar_rank_mean();
+    std::cout << "T1 CVaRRank mean ≈ 0.5: ok\n";
+
+    test_cvar_rank_invariance();
+    std::cout << "T2 CVaRRank monotonic invariance: ok\n";
+
+    test_cvar_limits();
+    std::cout << "T3 CVaR limits: ok\n";
+
+    test_zscore_normalization();
+    std::cout << "T4 Z-score normalization: ok\n";
+
+    test_curriculum_linear();
+    std::cout << "T5 Curriculum linear/none/explicit: ok\n";
+
+    test_hidden_size();
+    std::cout << "T6 setHiddenSize + inferHiddenFromWeights: ok\n";
+
+    test_training_determinism();
+    std::cout << "T7 Training determinism (all aggregators): ok\n";
 
     std::cout << "\nResults: " << g_pass << " passed, " << g_fail << " failed\n";
     return g_fail > 0 ? 1 : 0;

@@ -1,21 +1,36 @@
 #pragma once
 #include <vector>
 #include <cstddef>
+#include <cmath>
 
-struct GenerationStats {
-    int   generation  = 0;
-    float bestFitness = 0.f;
-    float meanFitness = 0.f;
-    float stdFitness  = 0.f;
-    int   completed   = 0;
-    int   population  = 0;
-    // Done reason breakdown
+struct PerMapStats {
+    int   mapIndex    = -1;
+    bool  active      = false;
+    int   nEvaluated  = 0;
+    float bestRaw     = 0.f;
+    float meanRaw     = 0.f;
+    float medianRaw   = 0.f;
+    float stdRaw      = 0.f;
+    float normalizedBest = 0.f;
+    int   nCompleted  = 0;
     int   nCollision  = 0;
     int   nStall      = 0;
     int   nTimeout    = 0;
-    // Multi-map aggregation
-    float aggScore    = 0.f;              // min-normalised score of best genome
-    std::vector<float> perMapBest;        // best normalised score per training map
+};
+
+struct GenerationStats {
+    int   generation  = 0;
+    int   population  = 0;
+
+    float aggBest      = 0.f;
+    float aggMean      = 0.f;
+    float aggMedian    = 0.f;
+    float aggStd       = 0.f;
+    float aggTopDecile = 0.f;
+    float aggMin       = 0.f;
+
+    std::vector<PerMapStats> perMap;
+    int   activeMapCount = 0;
 };
 
 class Trainer {

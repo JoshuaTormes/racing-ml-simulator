@@ -135,6 +135,42 @@ void NeuralNetwork::load(const std::string& path) {
     loadFromBuffer(buf);
 }
 
+void setHiddenSize(int h) {
+    if (h <= 0) throw std::runtime_error("setHiddenSize: h must be positive, got " + std::to_string(h));
+    NN_HIDDEN = h;
+}
+
+int inferHiddenFromWeights(size_t weightCount) {
+    if (weightCount <= (size_t)ACT_SIZE) return -1;
+    size_t num = weightCount - (size_t)ACT_SIZE;
+    size_t den = (size_t)(OBS_SIZE + 1 + ACT_SIZE);
+    if (num % den != 0) return -1;
+    int H = (int)(num / den);
+    return H > 0 ? H : -1;
+}
+
+std::vector<int> readTopologyFromFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("readTopologyFromFile: cannot open " + path);
+    auto readU32 = [&]() -> uint32_t {
+        uint32_t v = 0;
+        f.read(reinterpret_cast<char*>(&v), 4);
+        if (!f) throw std::runtime_error("readTopologyFromFile: unexpected EOF in " + path);
+        return v;
+    };
+    char magic[4];
+    f.read(magic, 4);
+    if (!f || std::memcmp(magic, NN_MAGIC, 4) != 0)
+        throw std::runtime_error("readTopologyFromFile: invalid magic in " + path);
+    uint32_t ver = readU32();
+    if (ver != NN_VERSION)
+        throw std::runtime_error("readTopologyFromFile: unsupported version " + std::to_string(ver) + " in " + path);
+    uint32_t nl = readU32();
+    std::vector<int> topo(nl);
+    for (auto& s : topo) s = (int)readU32();
+    return topo;
+}
+
 // ---------- NeuralNetworkController ----------
 
 Action NeuralNetworkController::decide(const Observation& obs) {

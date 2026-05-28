@@ -16,11 +16,21 @@ constexpr float MAX_LAT_ACCEL   = 650.f;  // grip limit (px/s²): yawRate ≤ MA
 constexpr float EPISODE_TIMEOUT = 60.f;
 constexpr float STALL_TIMEOUT      = 2.f;
 constexpr float STALL_SPEED        = 4.f;    // px/s — below this counts as stopped
-constexpr float STALL_PROGRESS_MIN = 0.05f;  // min waypoint advance to reset stall timer (blocks spin-in-place)
-// inputs: rays[0..NUM_RAYS-1], speed, angle_to_wp, dist_to_wp, angle_to_wp2,
-//         then 5x (curvature_Nahead, speed_excess_Nahead) for N=1..5
-constexpr int   OBS_SIZE        = NUM_RAYS + 14; // 27 with NUM_RAYS=13
-constexpr int   NN_HIDDEN       = 32;
+// Min normalized arc progress to reset stall timer (progress ∈ [0,1] over centerline arc length).
+// 0.003 ≈ 0.3% of the lap.
+constexpr float STALL_PROGRESS_MIN = 0.003f;
+// Centerline densification: Catmull-Rom sub-segments per original waypoint interval.
+constexpr int   CENTERLINE_SUBSEGMENTS = 10;
+// Arc window used by Track::curvatureAtArc (signed turn-angle over this much arc, in px).
+// Re-used by Car::observe to derive a radius estimate from the angle.
+constexpr float CURVATURE_ARC_WINDOW = 20.f;
+// Lookahead distances (in centerline arc px) used by Car::observe for curvature inputs.
+constexpr int   NUM_LOOKAHEADS    = 5;
+constexpr float LOOKAHEAD_ARCS[NUM_LOOKAHEADS] = { 30.f, 60.f, 100.f, 160.f, 240.f };
+// inputs: rays[0..NUM_RAYS-1], speed, lateral_offset, heading_error,
+//         then NUM_LOOKAHEADS × (signed_curvature, speed_excess)
+constexpr int   OBS_SIZE        = NUM_RAYS + 3 + 2 * NUM_LOOKAHEADS; // 26 with NUM_RAYS=13
+inline int      NN_HIDDEN       = 32;
 constexpr int   ACT_SIZE        = 2;
 constexpr float CAR_LENGTH      = 20.f;
 constexpr float CAR_WIDTH       = 10.f;

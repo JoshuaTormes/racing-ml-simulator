@@ -98,21 +98,36 @@ void Renderer::drawTrack(const Track& track) {
             window_.draw(line, 2, sf::PrimitiveType::Lines);
         }
     };
+    // Dense centerline (thin gray) — drawn before borders so they sit on top.
+    {
+        const auto& center = track.centerline();
+        for (int i = 0; i + 1 < (int)center.size(); ++i) {
+            sf::Vertex line[2] = {
+                sf::Vertex{toSf(center[i]),     sf::Color(80, 80, 80, 120)},
+                sf::Vertex{toSf(center[i + 1]), sf::Color(80, 80, 80, 120)}
+            };
+            window_.draw(line, 2, sf::PrimitiveType::Lines);
+        }
+    }
+
     drawPoly(track.leftBorder(),  sf::Color::White);
     drawPoly(track.rightBorder(), sf::Color::White);
 
-    // Waypoints as small dots
-    for (auto& wp : track.waypoints()) {
+    // Design waypoints (sparse anchors from JSON) as small blue dots.
+    for (auto& wp : track.designWaypoints()) {
         sf::CircleShape dot(4.f);
         dot.setFillColor(sf::Color(100, 100, 255, 120));
         dot.setPosition({wp.x - 4.f, wp.y - 4.f});
         window_.draw(dot);
     }
 
-    const auto& wps = track.waypoints();
-    const auto& lb  = track.leftBorder();
-    const auto& rb  = track.rightBorder();
-    int n = (int)wps.size();
+    // Start/finish lines use border points indexed by design waypoints.
+    // Each designWaypoint k corresponds to centerline_[k * CENTERLINE_SUBSEGMENTS],
+    // which is also the index into leftBorder_ / rightBorder_.
+    const auto& dwps = track.designWaypoints();
+    const auto& lb   = track.leftBorder();
+    const auto& rb   = track.rightBorder();
+    int nDesign = (int)dwps.size();
 
     // Draw a solid colored line
     auto drawLine = [&](Vec2 a, Vec2 b, sf::Color col, float thickness) {
@@ -145,14 +160,16 @@ void Renderer::drawTrack(const Track& track) {
         }
     };
 
-    // Start line — use pre-computed border points at wp[0]
+    // Start line — border points at the spawn design waypoint (index 0).
     if (!lb.empty()) {
         drawLine(lb[0], rb[0], sf::Color(255, 255, 255, 200), 5.f);
     }
 
-    // Finish line — use pre-computed border points at wp[n-1]
-    if (n >= 2 && (int)lb.size() >= n) {
-        drawCheckered(lb[n-1], rb[n-1], 6.f);
+    // Finish line — border points at the last design waypoint.
+    if (nDesign >= 2) {
+        int finishIdx = (nDesign - 1) * CENTERLINE_SUBSEGMENTS;
+        if (finishIdx < (int)lb.size())
+            drawCheckered(lb[finishIdx], rb[finishIdx], 6.f);
     }
 
     // Obstacles
@@ -206,7 +223,7 @@ void Renderer::drawHUD(const Game& game) {
     ss << std::fixed << std::setprecision(1);
     ss << "Speed: " << (int)std::fabs(c.speed) << " px/s\n";
     ss << "Time:  " << c.episodeTime << " s\n";
-    ss << "Prog:  " << std::setprecision(2) << c.progState.totalProg << "\n";
+    ss << "Prog:  " << std::setprecision(2) << c.maxProgress << "\n";
     ss << "Cars:  " << game.config().population;
 
     sf::Text text(font_, ss.str(), 16);
@@ -348,9 +365,12 @@ void Renderer::drawTrainingHUD(const TrainingSession& session) {
     ss << "Algo: " << session.algoName() << "\n";
     ss << "Total: " << total << "  Vivos: " << alive << "  Elim: " << elim << "\n";
     if (stats.generation > 0) {
-        ss << "Best: " << stats.bestFitness << "\n";
-        ss << "Mean: " << stats.meanFitness << "\n";
-        ss << "Done: " << stats.completed << "/" << stats.population << "\n";
+        ss << "Best: " << stats.aggBest << "\n";
+        ss << "Mean: " << stats.aggMean << "\n";
+        int totalDone = 0;
+        for (const auto& pm : stats.perMap)
+            if (pm.active) totalDone += pm.nCompleted;
+        ss << "Done: " << totalDone << "/" << stats.population << "\n";
     }
     ss << "Velocidade: " << (int)speedValue_ << "x";
 
@@ -366,7 +386,7 @@ void Renderer::drawCarDebugHUD(const Car& car) {
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(1);
     ss << "spd: "       << std::fabs(car.speed) << " px/s\n";
-    ss << "wp: "        << car.progState.nextWp << "\n";
+    ss << "cp: "        << car.lastCheckpoint    << "\n";
     ss << "noProgress: "<< car.noProgressTime   << "s\n";
     ss << "lowSpd: "    << car.lowSpeedTime      << "s\n";
     ss << "fitness: "   << car.fitness;
@@ -400,8 +420,8 @@ void Renderer::drawFitnessGraph(const std::vector<GenerationStats>& history) {
     float minF =  std::numeric_limits<float>::infinity();
     float maxF = -std::numeric_limits<float>::infinity();
     for (const auto& s : history) {
-        if (s.bestFitness < minF) minF = s.bestFitness;
-        if (s.bestFitness > maxF) maxF = s.bestFitness;
+        if (s.aggBest < minF) minF = s.aggBest;
+        if (s.aggBest > maxF) maxF = s.aggBest;
     }
     float range = (maxF - minF > 1e-6f) ? maxF - minF : 1.f;
 
@@ -410,7 +430,7 @@ void Renderer::drawFitnessGraph(const std::vector<GenerationStats>& history) {
     pts.reserve(history.size());
     for (size_t i = 0; i < history.size(); ++i) {
         float t = (float)i / (float)(history.size() - 1);
-        float norm = (history[i].bestFitness - minF) / range;
+        float norm = (history[i].aggBest - minF) / range;
         float x = px + t * pw;
         float y = py + ph - norm * ph;
         pts.push_back(sf::Vertex{{x, y}, sf::Color(100, 220, 100)});
