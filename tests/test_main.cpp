@@ -685,36 +685,69 @@ static void test_zscore_normalization() {
     ASSERT(std::fabs(sigma - 1.f) < 1e-4f);
 }
 
-// ---------- T5: Linear curriculum activates correct count per gen ----------
+// ---------- T5: Curriculum produces correct active map indices ----------
 static void test_curriculum_linear() {
     using namespace training_math;
+
+    auto count = [](int gen, int total, const CurriculumConfig& cfg) {
+        return (int)active_map_indices(gen, total, cfg).size();
+    };
+    auto has = [](const std::vector<int>& v, int x) {
+        return std::find(v.begin(), v.end(), x) != v.end();
+    };
+
     CurriculumConfig cfg;
     cfg.mode  = CurriculumMode::Linear;
     cfg.start = 2;
     cfg.step  = 15;
 
-    ASSERT(active_map_count(0,  6, cfg) == 2);
-    ASSERT(active_map_count(14, 6, cfg) == 2);
-    ASSERT(active_map_count(15, 6, cfg) == 3);
-    ASSERT(active_map_count(29, 6, cfg) == 3);
-    ASSERT(active_map_count(30, 6, cfg) == 4);
-    ASSERT(active_map_count(90, 6, cfg) == 6);  // capped at total=6
-    ASSERT(active_map_count(0,  1, cfg) == 1);  // single-map: always 1
+    ASSERT(count(0,  6, cfg) == 2);
+    ASSERT(count(14, 6, cfg) == 2);
+    ASSERT(count(15, 6, cfg) == 3);
+    ASSERT(count(29, 6, cfg) == 3);
+    ASSERT(count(30, 6, cfg) == 4);
+    ASSERT(count(90, 6, cfg) == 6);
+    ASSERT(count(0,  1, cfg) == 1);
 
     // None mode
     CurriculumConfig none;
     none.mode = CurriculumMode::None;
-    ASSERT(active_map_count(0,  6, none) == 6);
+    ASSERT(count(0, 6, none) == 6);
 
     // Explicit mode
     CurriculumConfig expl;
     expl.mode = CurriculumMode::Explicit;
-    expl.schedule = {10, 20, 30}; // M=4, M-1=3 thresholds
-    ASSERT(active_map_count(0,  4, expl) == 1);
-    ASSERT(active_map_count(9,  4, expl) == 1);
-    ASSERT(active_map_count(10, 4, expl) == 2);
-    ASSERT(active_map_count(25, 4, expl) == 3);
-    ASSERT(active_map_count(30, 4, expl) == 4);
+    expl.schedule = {10, 20, 30};
+    ASSERT(count(0,  4, expl) == 1);
+    ASSERT(count(9,  4, expl) == 1);
+    ASSERT(count(10, 4, expl) == 2);
+    ASSERT(count(25, 4, expl) == 3);
+    ASSERT(count(30, 4, expl) == 4);
+
+    // E5: pinned indices always present
+    CurriculumConfig pinCfg;
+    pinCfg.mode  = CurriculumMode::Linear;
+    pinCfg.start = 2;
+    pinCfg.step  = 15;
+    pinCfg.pinned = {5};
+
+    auto idx0 = active_map_indices(0,  6, pinCfg);   // linear gives {0,1} + pinned {5} = {0,1,5}
+    ASSERT(count(0, 6, pinCfg) == 3);
+    ASSERT(has(idx0, 0) && has(idx0, 1) && has(idx0, 5));
+
+    auto idx30 = active_map_indices(30, 6, pinCfg);  // linear gives {0,1,2,3} + {5} = {0,1,2,3,5}
+    ASSERT(count(30, 6, pinCfg) == 5);
+    ASSERT(has(idx30, 5));
+
+    // Multiple pins, including one already in active set
+    pinCfg.pinned = {3, 5};
+    auto idxP = active_map_indices(0, 6, pinCfg);     // {0,1} + {3,5} = {0,1,3,5}
+    ASSERT(count(0, 6, pinCfg) == 4);
+    ASSERT(has(idxP, 3) && has(idxP, 5));
+
+    // Pinned index out of range is ignored
+    pinCfg.pinned = {99};
+    ASSERT(count(0, 6, pinCfg) == 2);
 }
 
 // ---------- T6: setHiddenSize + inferHiddenFromWeights ----------
@@ -793,6 +826,22 @@ static void test_training_determinism() {
 
         std::filesystem::remove_all(tmpBase);
     }
+}
+
+// ---------- E3: EPISODE_TIMEOUT runtime configurable ----------
+static void test_episode_timeout_runtime() {
+    float origTimeout = EPISODE_TIMEOUT;
+
+    setEpisodeTimeout(15.f);
+    ASSERT(std::fabs(EPISODE_TIMEOUT - 15.f) < 1e-5f);
+    ASSERT(std::fabs(episodeTimeout() - 15.f) < 1e-5f);
+
+    setEpisodeTimeout(60.f);
+    ASSERT(std::fabs(EPISODE_TIMEOUT - 60.f) < 1e-5f);
+
+    // Restore
+    EPISODE_TIMEOUT = origTimeout;
+    ASSERT(std::fabs(EPISODE_TIMEOUT - origTimeout) < 1e-5f);
 }
 
 // ---------- E2: NN forward without allocations ----------
@@ -1026,6 +1075,9 @@ int main() {
 
     test_training_determinism();
     std::cout << "T7 Training determinism (all aggregators): ok\n";
+
+    test_episode_timeout_runtime();
+    std::cout << "E3 EPISODE_TIMEOUT runtime configurable: ok\n";
 
     test_nn_forward_no_alloc();
     std::cout << "E2 NN forward without allocations: ok\n";

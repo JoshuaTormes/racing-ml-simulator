@@ -90,9 +90,9 @@ void TrainingSession::recordCurrentMapFitness() {
     perMapFitness_[(size_t)currentMapInGen_] = game_.fitnesses();
 }
 
-std::vector<float> TrainingSession::aggregateFitness(int activeMaps) const {
+std::vector<float> TrainingSession::aggregateFitness(const std::vector<int>& activeIdx) const {
     size_t P = trainer_->populationSize();
-    size_t M = (size_t)activeMaps;
+    size_t M = activeIdx.size();
     std::vector<float> result(P, 0.f);
     if (M == 0) return result;
 
@@ -100,44 +100,56 @@ std::vector<float> TrainingSession::aggregateFitness(int activeMaps) const {
     const float       alpha = mmCfg_.cvarAlpha;
     const float       wProg = game_.config().reward.w_progress;
 
+    // Helper: per-map weight (default 1.0 if mapWeights is unset or too short)
+    auto mapWeight = [&](size_t i) -> float {
+        return (i < mmCfg_.mapWeights.size()) ? mmCfg_.mapWeights[i] : 1.0f;
+    };
+
     if (agg == FitnessAgg::CVaRRank) {
+        // Compute normalized ranks per active map, apply per-map weight.
         std::vector<std::vector<float>> mapRanks(M);
-        for (size_t mi = 0; mi < M; ++mi)
-            mapRanks[mi] = training_math::normalized_ranks(perMapFitness_[mi]);
+        for (size_t i = 0; i < M; ++i) {
+            size_t mi = (size_t)activeIdx[i];
+            mapRanks[i] = training_math::normalized_ranks(perMapFitness_[mi]);
+            float w = mapWeight(mi);
+            if (w != 1.0f)
+                for (auto& v : mapRanks[i]) v *= w;
+        }
         for (size_t c = 0; c < P; ++c) {
             std::vector<float> carRanks(M);
-            for (size_t mi = 0; mi < M; ++mi)
-                carRanks[mi] = mapRanks[mi][c];
+            for (size_t i = 0; i < M; ++i)
+                carRanks[i] = mapRanks[i][c];
             result[c] = training_math::cvar(carRanks, alpha);
         }
     } else {
         std::vector<std::vector<float>> norm(M);
-        for (size_t mi = 0; mi < M; ++mi) {
+        for (size_t i = 0; i < M; ++i) {
+            size_t mi = (size_t)activeIdx[i];
             switch (mmCfg_.mapNorm) {
                 case MapNormMode::ZScore:
-                    norm[mi] = training_math::normalize_zscore(perMapFitness_[mi]);
+                    norm[i] = training_math::normalize_zscore(perMapFitness_[mi]);
                     break;
                 case MapNormMode::MinMax:
-                    norm[mi] = training_math::normalize_minmax(perMapFitness_[mi]);
+                    norm[i] = training_math::normalize_minmax(perMapFitness_[mi]);
                     break;
                 case MapNormMode::Progress:
-                    norm[mi] = training_math::normalize_progress(perMapFitness_[mi], wProg);
+                    norm[i] = training_math::normalize_progress(perMapFitness_[mi], wProg);
                     break;
             }
         }
         for (size_t c = 0; c < P; ++c) {
             if (agg == FitnessAgg::Min) {
                 float worst = std::numeric_limits<float>::max();
-                for (size_t mi = 0; mi < M; ++mi)
-                    worst = std::min(worst, norm[mi][c]);
+                for (size_t i = 0; i < M; ++i)
+                    worst = std::min(worst, norm[i][c]);
                 result[c] = worst;
             } else if (agg == FitnessAgg::Mean) {
                 float sum = 0.f;
-                for (size_t mi = 0; mi < M; ++mi) sum += norm[mi][c];
+                for (size_t i = 0; i < M; ++i) sum += norm[i][c];
                 result[c] = sum / (float)M;
             } else { // CVaRRaw
                 std::vector<float> vals(M);
-                for (size_t mi = 0; mi < M; ++mi) vals[mi] = norm[mi][c];
+                for (size_t i = 0; i < M; ++i) vals[i] = norm[i][c];
                 result[c] = training_math::cvar(vals, alpha);
             }
         }
@@ -188,8 +200,8 @@ bool TrainingSession::generationComplete() const {
 void TrainingSession::evaluateGenerationParallel() {
     size_t P = trainer_->populationSize();
     size_t M = trainTracks_.size();
-    int activeMaps = training_math::active_map_count(currentGen_, (int)M, mmCfg_.curriculum);
-    size_t AM = (size_t)activeMaps;
+    auto activeIdx = training_math::active_map_indices(currentGen_, (int)M, mmCfg_.curriculum);
+    size_t AM = activeIdx.size();
 
     std::vector<NeuralNetwork> nets;
     nets.reserve(P);
@@ -203,40 +215,115 @@ void TrainingSession::evaluateGenerationParallel() {
     perMapDoneReasons_.assign(M, std::vector<DoneReason>(P, DoneReason::None));
 
     // Zero out inactive maps
-    for (size_t mi = AM; mi < M; ++mi)
-        std::fill(perMapFitness_[mi].begin(), perMapFitness_[mi].end(), 0.f);
-
-    std::atomic<size_t> next{0};
-    const size_t total = AM * P;
-    const RewardConfig& reward = game_.config().reward;
-
-    std::vector<std::thread> workers;
-    workers.reserve((size_t)workerCount_);
-
-    for (int w = 0; w < workerCount_; ++w) {
-        workers.emplace_back([&]() {
-            size_t t;
-            while ((t = next.fetch_add(1, std::memory_order_relaxed)) < total) {
-                size_t m = t / P;
-                size_t c = t % P;
-                NeuralNetworkController ctrl(nets[c]);
-                auto r = Game::simulateEpisode(*trainTracks_[m], ctrl, reward);
-                perMapFitness_[m][c]    = r.fitness;
-                perMapDoneReasons_[m][c] = r.doneReason;
-                if (m == 0)
-                    diagReasons_[c] = r.doneReason;
-            }
-        });
+    {
+        std::vector<bool> isActive(M, false);
+        for (int mi : activeIdx) isActive[(size_t)mi] = true;
+        for (size_t mi = 0; mi < M; ++mi)
+            if (!isActive[mi])
+                std::fill(perMapFitness_[mi].begin(), perMapFitness_[mi].end(), 0.f);
     }
-    for (auto& th : workers) th.join();
+
+    const RewardConfig& reward = game_.config().reward;
+    const float progFrac = mmCfg_.progressiveFrac;
+
+    if (progFrac >= 1.0f || AM <= 1) {
+        // Standard path: evaluate all agents on all active maps.
+        std::atomic<size_t> next{0};
+        const size_t total = AM * P;
+        std::vector<std::thread> workers;
+        workers.reserve((size_t)workerCount_);
+        for (int w = 0; w < workerCount_; ++w) {
+            workers.emplace_back([&]() {
+                size_t t;
+                while ((t = next.fetch_add(1, std::memory_order_relaxed)) < total) {
+                    size_t ai = t / P;
+                    size_t c  = t % P;
+                    size_t mi = (size_t)activeIdx[ai];
+                    NeuralNetworkController ctrl(nets[c]);
+                    auto r = Game::simulateEpisode(*trainTracks_[mi], ctrl, reward);
+                    perMapFitness_[mi][c]     = r.fitness;
+                    perMapDoneReasons_[mi][c] = r.doneReason;
+                    if (mi == 0) diagReasons_[c] = r.doneReason;
+                }
+            });
+        }
+        for (auto& th : workers) th.join();
+    } else {
+        // Progressive path: pass 1 = map[activeIdx[0]] for full pop; then top-K on rest.
+        size_t firstMap = (size_t)activeIdx[0];
+
+        // Pass 1
+        {
+            std::atomic<size_t> next{0};
+            std::vector<std::thread> workers;
+            workers.reserve((size_t)workerCount_);
+            for (int w = 0; w < workerCount_; ++w) {
+                workers.emplace_back([&]() {
+                    size_t c;
+                    while ((c = next.fetch_add(1, std::memory_order_relaxed)) < P) {
+                        NeuralNetworkController ctrl(nets[c]);
+                        auto r = Game::simulateEpisode(*trainTracks_[firstMap], ctrl, reward);
+                        perMapFitness_[firstMap][c]     = r.fitness;
+                        perMapDoneReasons_[firstMap][c] = r.doneReason;
+                        diagReasons_[c] = r.doneReason;
+                    }
+                });
+            }
+            for (auto& th : workers) th.join();
+        }
+
+        // Rank by pass-1 fitness; select top-K
+        size_t K = (size_t)std::ceil(progFrac * (float)P);
+        if (K < 1) K = 1;
+        if (K > P) K = P;
+
+        std::vector<size_t> order(P);
+        std::iota(order.begin(), order.end(), 0);
+        std::partial_sort(order.begin(), order.begin() + (long)K, order.end(),
+                          [&](size_t a, size_t b) {
+                              return perMapFitness_[firstMap][a] > perMapFitness_[firstMap][b];
+                          });
+        std::vector<size_t> topK(order.begin(), order.begin() + (long)K);
+
+        // Zero remaining maps for non-top agents
+        for (size_t ai = 1; ai < AM; ++ai) {
+            size_t mi = (size_t)activeIdx[ai];
+            std::fill(perMapFitness_[mi].begin(), perMapFitness_[mi].end(), 0.f);
+        }
+
+        // Pass 2: top-K × remaining maps
+        if (AM > 1) {
+            const size_t tasks = (AM - 1) * K;
+            std::atomic<size_t> next{0};
+            std::vector<std::thread> workers;
+            workers.reserve((size_t)workerCount_);
+            for (int w = 0; w < workerCount_; ++w) {
+                workers.emplace_back([&]() {
+                    size_t t;
+                    while ((t = next.fetch_add(1, std::memory_order_relaxed)) < tasks) {
+                        size_t ai = 1 + t / K;
+                        size_t ki = t % K;
+                        size_t mi = (size_t)activeIdx[ai];
+                        size_t c  = topK[ki];
+                        NeuralNetworkController ctrl(nets[c]);
+                        auto r = Game::simulateEpisode(*trainTracks_[mi], ctrl, reward);
+                        perMapFitness_[mi][c]     = r.fitness;
+                        perMapDoneReasons_[mi][c] = r.doneReason;
+                    }
+                });
+            }
+            for (auto& th : workers) th.join();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // finalizeGeneration
 // ---------------------------------------------------------------------------
 void TrainingSession::finalizeGeneration() {
-    int activeMaps = training_math::active_map_count(currentGen_, (int)trainMaps_.size(), mmCfg_.curriculum);
-    auto agg = aggregateFitness(activeMaps);
+    auto activeIdx = training_math::active_map_indices(currentGen_, (int)trainMaps_.size(), mmCfg_.curriculum);
+    int activeMaps = (int)activeIdx.size();
+    auto agg = aggregateFitness(activeIdx);
     size_t n = agg.size();
     for (size_t i = 0; i < n; ++i)
         trainer_->setFitness(i, agg[i]);
@@ -284,11 +371,13 @@ void TrainingSession::finalizeGeneration() {
 
     // Per-map stats
     float wProg = game_.config().reward.w_progress;
+    std::vector<bool> isActiveMap(trainMaps_.size(), false);
+    for (int i : activeIdx) isActiveMap[(size_t)i] = true;
     stats.perMap.resize(trainMaps_.size());
     for (size_t mi = 0; mi < trainMaps_.size(); ++mi) {
         auto& pm = stats.perMap[mi];
         pm.mapIndex  = (int)mi;
-        pm.active    = (int)mi < activeMaps;
+        pm.active    = isActiveMap[mi];
 
         if (pm.active) {
             pm.nEvaluated = (int)n;

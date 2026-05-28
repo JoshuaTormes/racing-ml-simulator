@@ -17,13 +17,16 @@ struct CurriculumConfig {
     int              start    = 2;
     int              step     = 15;
     std::vector<int> schedule; // gen thresholds for mode==Explicit (M-1 values)
+    std::vector<int> pinned;   // map indices always active regardless of curriculum
 };
 
 struct MultiMapConfig {
-    FitnessAgg     fitnessAgg  = FitnessAgg::CVaRRank;
-    float          cvarAlpha   = 0.5f;
-    MapNormMode    mapNorm     = MapNormMode::ZScore;
+    FitnessAgg       fitnessAgg    = FitnessAgg::CVaRRank;
+    float            cvarAlpha     = 0.5f;
+    MapNormMode      mapNorm       = MapNormMode::ZScore;
     CurriculumConfig curriculum;
+    std::vector<float> mapWeights; // per-map weights for CVaRRank; empty = all 1.0
+    float            progressiveFrac = 1.0f; // fraction of population evaluated on maps[1..]
 };
 
 class TrainingSession {
@@ -88,7 +91,7 @@ private:
 
     void loadTrainMap(size_t mapIdx);
     void recordCurrentMapFitness();
-    std::vector<float> aggregateFitness(int activeMaps) const;
+    std::vector<float> aggregateFitness(const std::vector<int>& activeIdx) const;
     void evaluateHeldOut(size_t championIdx);
     void advanceIfMapDone();
 

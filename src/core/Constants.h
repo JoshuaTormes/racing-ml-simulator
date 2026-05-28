@@ -13,7 +13,9 @@ constexpr float BRAKE           = 500.f;
 constexpr float DRAG            = 0.98f;
 constexpr float MAX_STEER       = 3.0f;
 constexpr float MAX_LAT_ACCEL   = 650.f;  // grip limit (px/s²): yawRate ≤ MAX_LAT_ACCEL/v
-constexpr float EPISODE_TIMEOUT = 60.f;
+inline float EPISODE_TIMEOUT = 30.f;
+inline void  setEpisodeTimeout(float t) { EPISODE_TIMEOUT = t; }
+inline float episodeTimeout() noexcept  { return EPISODE_TIMEOUT; }
 constexpr float STALL_TIMEOUT      = 2.f;
 constexpr float STALL_SPEED        = 4.f;    // px/s — below this counts as stopped
 // Min normalized arc progress to reset stall timer (progress ∈ [0,1] over centerline arc length).

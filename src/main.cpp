@@ -71,6 +71,14 @@ static void printUsage(const char* argv0) {
         << "  --curriculum-schedule <g1,g2,...>  Gen thresholds for explicit (M-1 values)\n"
         << "  --hidden <N>          Hidden layer size override (default: 32)\n"
         << "  --log-csv             Write training_log.csv and held_out_log.csv to --out dir\n"
+        << "\nPerformance & map prioritization\n"
+        << "  --episode-timeout SEC  Max episode length in seconds (default: 30)\n"
+        << "  --curriculum-pin IDX  Comma-separated map indices always active (e.g. \"5\" or \"3,5\")\n"
+        << "  --map-weights W1,...   Per-map weights for cvar-rank aggregation (e.g. \"1,1,1,1,1,3\")\n"
+        << "                         Length must match --train-maps count; each weight > 0\n"
+        << "  --progressive-frac F  Fraction of pop evaluated on maps[1..] after map[0] (default: 1.0)\n"
+        << "  --finetune-map NAME   Fine-tune champion on a single map (requires --load)\n"
+        << "                         Accepts bare name (map6_chicanes_infernais) or full path\n"
         << "\n  Default when --train is active and no --train-maps is given:\n"
         << "    all *.json in maps/, sorted; first 6 = train, last 2 = val (reproducible split).\n"
         << "  Single-map compat: --map without --train-maps trains only on that map.\n"
@@ -135,6 +143,11 @@ int main(int argc, char* argv[]) {
     std::string currScheduleArg;
     int         hiddenOverride  = -1;  // -1 = not specified
     bool        logCsv          = false;
+    float       episodeTimeoutArg = -1.f;
+    std::string curriculumPinArg;
+    std::string mapWeightsArg;
+    float       progressiveFrac   = 1.0f;
+    std::string finetuneMapArg;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -163,7 +176,12 @@ int main(int argc, char* argv[]) {
             else if (arg == "--curriculum-schedule" && i+1 < argc) currScheduleArg = argv[++i];
             else if (arg == "--hidden"       && i+1 < argc)  hiddenOverride  = std::stoi(argv[++i]);
             else if (arg == "--log-csv")                      logCsv         = true;
-            else if (arg == "--help" || arg == "-h")          showHelp       = true;
+            else if (arg == "--episode-timeout"  && i+1 < argc) episodeTimeoutArg = std::stof(argv[++i]);
+            else if (arg == "--curriculum-pin"   && i+1 < argc) curriculumPinArg  = argv[++i];
+            else if (arg == "--map-weights"      && i+1 < argc) mapWeightsArg     = argv[++i];
+            else if (arg == "--progressive-frac" && i+1 < argc) progressiveFrac   = std::stof(argv[++i]);
+            else if (arg == "--finetune-map"     && i+1 < argc) finetuneMapArg    = argv[++i];
+            else if (arg == "--help" || arg == "-h")             showHelp          = true;
             else { std::cerr << "Unknown option: " << arg << "\n"; showHelp = true; }
         } catch (const std::exception& e) {
             std::cerr << "Error parsing " << arg << ": " << e.what() << "\n";
@@ -228,6 +246,15 @@ int main(int argc, char* argv[]) {
         }
     } else if (hiddenOverride >= 0) {
         setHiddenSize(hiddenOverride);
+    }
+
+    // ---- Apply --episode-timeout ----
+    if (episodeTimeoutArg > 0.f) {
+        if (episodeTimeoutArg > 600.f) {
+            std::cerr << "--episode-timeout must be in (0, 600], got " << episodeTimeoutArg << "\n";
+            return 1;
+        }
+        setEpisodeTimeout(episodeTimeoutArg);
     }
 
     // ---- benchmark ----
@@ -401,12 +428,72 @@ int main(int argc, char* argv[]) {
                 currCfg.schedule.push_back(std::stoi(tok));
         }
 
+        // ----- --curriculum-pin: parse and validate -------------------------
+        if (!curriculumPinArg.empty()) {
+            auto tokens = splitComma(curriculumPinArg);
+            for (const auto& tok : tokens) {
+                int idx = std::stoi(tok);
+                if (idx < 0 || idx >= (int)trainMaps.size()) {
+                    std::cerr << "--curriculum-pin index " << idx
+                              << " out of range [0, " << trainMaps.size() - 1 << "]\n";
+                    return 1;
+                }
+                currCfg.pinned.push_back(idx);
+            }
+        }
+
+        // ----- --progressive-frac validation --------------------------------
+        if (progressiveFrac <= 0.f || progressiveFrac > 1.f) {
+            std::cerr << "--progressive-frac must be in (0, 1], got " << progressiveFrac << "\n";
+            return 1;
+        }
+
         // ----- Build MultiMapConfig ------------------------------------------
         MultiMapConfig mmCfg;
-        mmCfg.fitnessAgg  = fitnessAgg;
-        mmCfg.cvarAlpha   = cvarAlpha;
-        mmCfg.mapNorm     = mapNorm;
-        mmCfg.curriculum  = currCfg;
+        mmCfg.fitnessAgg      = fitnessAgg;
+        mmCfg.cvarAlpha       = cvarAlpha;
+        mmCfg.mapNorm         = mapNorm;
+        mmCfg.curriculum      = currCfg;
+        mmCfg.progressiveFrac = progressiveFrac;
+
+        // ----- --map-weights: parse and validate ----------------------------
+        if (!mapWeightsArg.empty()) {
+            auto tokens = splitComma(mapWeightsArg);
+            if ((int)tokens.size() != (int)trainMaps.size()) {
+                std::cerr << "--map-weights must have exactly " << trainMaps.size()
+                          << " values (one per train map); got " << tokens.size() << "\n";
+                return 1;
+            }
+            for (const auto& tok : tokens) {
+                float w = std::stof(tok);
+                if (w <= 0.f) {
+                    std::cerr << "--map-weights: each weight must be > 0, got " << w << "\n";
+                    return 1;
+                }
+                mmCfg.mapWeights.push_back(w);
+            }
+        }
+
+        // ----- --finetune-map: override maps and force single-map mode ------
+        if (!finetuneMapArg.empty()) {
+            if (loadPath.empty()) {
+                std::cerr << "--finetune-map requires --load <file.rnnw>\n";
+                return 1;
+            }
+            // Accept bare name (e.g. "map6_chicanes_infernais") or full path
+            std::string mapPath = finetuneMapArg;
+            if (mapPath.find('/') == std::string::npos && mapPath.find('\\') == std::string::npos)
+                mapPath = "maps/" + mapPath + (mapPath.size() >= 5 && mapPath.substr(mapPath.size()-5) == ".json" ? "" : ".json");
+            trainMaps = { mapPath };
+            valMaps   = {};
+            mmCfg.fitnessAgg          = FitnessAgg::Mean;
+            mmCfg.curriculum.mode     = CurriculumMode::None;
+            mmCfg.curriculum.pinned   = {};
+            mmCfg.mapWeights          = {};
+            mmCfg.progressiveFrac     = 1.0f;
+            std::cout << "Fine-tune mode: training only on " << mapPath
+                      << " from champion " << loadPath << "\n";
+        }
 
         // ----- Print config summary ------------------------------------------
         std::string aggName = fitnessAggArg;

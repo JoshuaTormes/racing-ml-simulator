@@ -78,23 +78,42 @@ std::vector<float> normalize_progress(const std::vector<float>& f, float wProgre
     return out;
 }
 
-int active_map_count(int gen, int total, const CurriculumConfig& cfg) {
-    if (total <= 0) return 0;
+std::vector<int> active_map_indices(int gen, int total, const CurriculumConfig& cfg) {
+    if (total <= 0) return {};
+
+    int count = 0;
     switch (cfg.mode) {
         case CurriculumMode::None:
-            return total;
-        case CurriculumMode::Linear: {
-            int active = cfg.start + gen / cfg.step;
-            return std::min(std::max(active, 1), total);
-        }
+            count = total;
+            break;
+        case CurriculumMode::Linear:
+            count = std::min(std::max(cfg.start + gen / cfg.step, 1), total);
+            break;
         case CurriculumMode::Explicit: {
-            int count = 0;
+            int n = 0;
             for (int thresh : cfg.schedule)
-                if (gen >= thresh) ++count;
-            return std::min(std::max(1 + count, 1), total);
+                if (gen >= thresh) ++n;
+            count = std::min(std::max(1 + n, 1), total);
+            break;
         }
     }
-    return total;
+
+    // Start with sequential indices [0, count)
+    std::vector<int> idx;
+    idx.reserve((size_t)total);
+    for (int i = 0; i < count; ++i) idx.push_back(i);
+
+    // Merge pinned indices (clamped to [0, total))
+    for (int p : cfg.pinned) {
+        if (p >= 0 && p < total) {
+            bool found = false;
+            for (int x : idx) if (x == p) { found = true; break; }
+            if (!found) idx.push_back(p);
+        }
+    }
+
+    std::sort(idx.begin(), idx.end());
+    return idx;
 }
 
 } // namespace training_math
