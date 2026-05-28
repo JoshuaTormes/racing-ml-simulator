@@ -328,8 +328,13 @@ void TrainingSession::finalizeGeneration() {
         nn.setWeights(trainer_->weights(bestIdx));
         nn.save(fname.str());
     }
-    if (best > bestGlobalF_) {
-        bestGlobalF_ = best;
+    // Under CVaRRank, aggregated score saturates at 1.0 every generation,
+    // so track raw fitness on the primary map instead to update best.rnnw.
+    float saveCriterion = (mmCfg_.fitnessAgg == FitnessAgg::CVaRRank && !perMapFitness_.empty())
+        ? perMapFitness_[0][bestIdx]
+        : best;
+    if (saveCriterion > bestGlobalF_) {
+        bestGlobalF_ = saveCriterion;
         NeuralNetwork nn(defaultTopology());
         nn.setWeights(trainer_->weights(bestIdx));
         nn.save(outDir_ + "/best.rnnw");
@@ -468,11 +473,15 @@ void TrainingSession::printStats(const GenerationStats& s) const {
               << "  agg[" << aggMode << "]:"
               << " best=" << std::setw(7) << s.aggBest
               << " mean=" << std::setw(7) << s.aggMean
-              << " med="  << std::setw(7) << s.aggMedian
-              << " std="  << std::setw(6) << s.aggStd
-              << " top10=" << std::setw(7) << s.aggTopDecile
-              << " min="  << std::setw(7) << s.aggMin
-              << "\n";
+              << " std="  << std::setw(6) << s.aggStd;
+
+    // Under CVaRRank, show the raw fitness of the champion on map 0 as a progress proxy,
+    // since rank-based agg scores are always in [0,1] and look flat on the console.
+    if (mmCfg_.fitnessAgg == FitnessAgg::CVaRRank && !s.perMap.empty() && s.perMap[0].active)
+        std::cout << std::fixed << std::setprecision(1)
+                  << "  ref_best=" << std::setw(7) << s.perMap[0].bestRaw << " (m0 raw)";
+
+    std::cout << "\n";
 
     std::cout << "  active maps: " << s.activeMapCount << "/" << (int)trainMaps_.size() << "\n";
 
