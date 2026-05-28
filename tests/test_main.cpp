@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <fstream>
@@ -794,6 +795,113 @@ static void test_training_determinism() {
     }
 }
 
+// ---------- E1: Spatial grid raycast and isInsideTrack correctness ----------
+static float bruteRaycast(const Track& track, Vec2 origin, Vec2 dir, float maxLen) {
+    float best = maxLen;
+    const auto& L = track.leftBorder();
+    const auto& R = track.rightBorder();
+    int n = (int)L.size();
+    for (int i = 0; i + 1 < n; ++i) {
+        auto segTest = [&](Vec2 a, Vec2 b) {
+            Vec2  ab  = b - a;
+            float det = dir.x * ab.y - dir.y * ab.x;
+            if (std::fabs(det) < 1e-9f) return;
+            Vec2  ao = origin - a;
+            float t  = -(ao.x * ab.y - ao.y * ab.x) / det;
+            float u  = -(ao.x * dir.y - ao.y * dir.x) / det;
+            if (t >= 0.f && u >= 0.f && u <= 1.f && t < best) best = t;
+        };
+        segTest(L[i], L[i+1]);
+        segTest(R[i], R[i+1]);
+    }
+    for (const auto& ob : track.obstacles()) {
+        if (ob.type == Obstacle::Type::Circle) {
+            Vec2 oc = origin - ob.pos;
+            float b = 2.f * oc.dot(dir), c = oc.dot(oc) - ob.radius * ob.radius;
+            float disc = b*b - 4.f*c;
+            if (disc >= 0.f) {
+                float sq = std::sqrt(disc);
+                float t0 = (-b - sq) * 0.5f, t1 = (-b + sq) * 0.5f;
+                float t = (t0 >= 0.f) ? t0 : t1;
+                if (t >= 0.f && t < best) best = t;
+            }
+        } else {
+            float hx = ob.size.x * 0.5f, hy = ob.size.y * 0.5f;
+            Vec2 corners[4] = {{ob.pos.x-hx,ob.pos.y-hy},{ob.pos.x+hx,ob.pos.y-hy},
+                               {ob.pos.x+hx,ob.pos.y+hy},{ob.pos.x-hx,ob.pos.y+hy}};
+            for (int k = 0; k < 4; ++k) {
+                Vec2 a = corners[k], bb2 = corners[(k+1)%4], ab = bb2 - a;
+                float det = dir.x*ab.y - dir.y*ab.x;
+                if (std::fabs(det) < 1e-9f) continue;
+                Vec2 ao = origin - a;
+                float t = -(ao.x*ab.y - ao.y*ab.x) / det;
+                float u = -(ao.x*dir.y - ao.y*dir.x) / det;
+                if (t >= 0.f && u >= 0.f && u <= 1.f && t < best) best = t;
+            }
+        }
+    }
+    return best;
+}
+
+static bool bruteInside(const Track& track, Vec2 p) {
+    auto cross2d = [](Vec2 u, Vec2 v) { return u.x * v.y - u.y * v.x; };
+    auto inTri = [&](Vec2 a, Vec2 b, Vec2 c) {
+        float d0 = cross2d(b-a, p-a), d1 = cross2d(c-b, p-b), d2 = cross2d(a-c, p-c);
+        return ((d0>=0&&d1>=0&&d2>=0)||(d0<=0&&d1<=0&&d2<=0));
+    };
+    const auto& L = track.leftBorder();
+    const auto& R = track.rightBorder();
+    int segs = (int)L.size() - 1;
+    for (int i = 0; i < segs; ++i)
+        if (inTri(L[i], L[i+1], R[i]) || inTri(L[i+1], R[i+1], R[i]))
+            return true;
+    return false;
+}
+
+static void test_track_spatial_grid() {
+    std::mt19937 rng(12345);
+
+    for (const char* path : {"maps/map1.json", "maps/map4_obstaculos.json",
+                              "maps/map6_chicanes_infernais.json"}) {
+        Track track(path);
+
+        // Compute AABB from spawn position as reference origin.
+        Vec2 sp = track.spawnPos();
+        float range = 1200.f;
+
+        std::uniform_real_distribution<float> distX(sp.x - range, sp.x + range);
+        std::uniform_real_distribution<float> distY(sp.y - range, sp.y + range);
+        std::uniform_real_distribution<float> distAngle(0.f, 6.2832f);
+
+        // Raycast correctness: 1000 random rays
+        bool rayOk = true;
+        for (int k = 0; k < 1000; ++k) {
+            Vec2 origin = {distX(rng), distY(rng)};
+            float angle = distAngle(rng);
+            Vec2 dir = {std::cos(angle), std::sin(angle)};
+
+            float tGrid  = track.raycast(origin, dir, RAY_MAX_LEN);
+            float tBrute = bruteRaycast(track, origin, dir, RAY_MAX_LEN);
+            if (std::fabs(tGrid - tBrute) > 0.1f) { rayOk = false; break; }
+        }
+        ASSERT(rayOk);
+
+        // isInsideTrack correctness: 1000 random points
+        bool insideOk = true;
+        for (int k = 0; k < 1000; ++k) {
+            Vec2 p = {distX(rng), distY(rng)};
+            if (track.isInsideTrack(p) != bruteInside(track, p)) { insideOk = false; break; }
+        }
+        ASSERT(insideOk);
+    }
+
+    // Spawning point must be inside (smoke test for new impl)
+    {
+        Track t("maps/map1.json");
+        ASSERT(t.isInsideTrack(t.spawnPos()));
+    }
+}
+
 int main() {
     std::cout << "=== Racing ML Sim Tests ===\n";
 
@@ -880,6 +988,9 @@ int main() {
 
     test_training_determinism();
     std::cout << "T7 Training determinism (all aggregators): ok\n";
+
+    test_track_spatial_grid();
+    std::cout << "E1 Spatial grid raycast/isInsideTrack correctness: ok\n";
 
     std::cout << "\nResults: " << g_pass << " passed, " << g_fail << " failed\n";
     return g_fail > 0 ? 1 : 0;
