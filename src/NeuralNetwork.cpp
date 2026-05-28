@@ -49,6 +49,29 @@ std::vector<float> NeuralNetwork::forward(const std::vector<float>& input) const
     return cur;
 }
 
+void NeuralNetwork::forward(const std::vector<float>& input,
+                            std::vector<float>& output,
+                            std::vector<float>& scratch) const {
+    int layers = (int)topology_.size() - 1;
+    scratch.resize(input.size());
+    std::copy(input.begin(), input.end(), scratch.begin());
+
+    for (int l = 0; l < layers; ++l) {
+        int in  = topology_[l];
+        int out = topology_[l + 1];
+        output.resize((size_t)out);
+        for (int o = 0; o < out; ++o) {
+            float sum = biases_[l][o];
+            for (int i = 0; i < in; ++i)
+                sum += weights_[l][o * in + i] * scratch[i];
+            output[o] = std::tanh(sum);
+        }
+        std::swap(scratch, output);
+    }
+    // After the loop, result is in scratch (last swap moved it there).
+    std::swap(output, scratch);
+}
+
 std::vector<float> NeuralNetwork::getWeights() const {
     std::vector<float> flat;
     int layers = (int)topology_.size() - 1;
@@ -174,11 +197,10 @@ std::vector<int> readTopologyFromFile(const std::string& path) {
 // ---------- NeuralNetworkController ----------
 
 Action NeuralNetworkController::decide(const Observation& obs) {
-    std::vector<float> input(obs.begin(), obs.end());
-    auto out = nn_.forward(input);
-    // Output layer has tanh → already in (-1, 1)
+    input_.assign(obs.begin(), obs.end());
+    nn_.forward(input_, output_, scratch_);
     return Action{
-        out.size() > 0 ? out[0] : 0.f,
-        out.size() > 1 ? out[1] : 0.f
+        output_.size() > 0 ? output_[0] : 0.f,
+        output_.size() > 1 ? output_[1] : 0.f
     };
 }

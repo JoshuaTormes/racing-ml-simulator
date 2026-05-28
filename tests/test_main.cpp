@@ -795,6 +795,44 @@ static void test_training_determinism() {
     }
 }
 
+// ---------- E2: NN forward without allocations ----------
+static void test_nn_forward_no_alloc() {
+    std::mt19937 rng(99);
+    std::uniform_real_distribution<float> dist(-1.f, 1.f);
+
+    for (int trial = 0; trial < 100; ++trial) {
+        std::vector<int> topo = defaultTopology();
+        NeuralNetwork nn(topo, (unsigned)rng());
+        std::vector<float> input((size_t)topo[0]);
+        for (auto& v : input) v = dist(rng);
+
+        auto outAlloc = nn.forward(input);
+        std::vector<float> outBuf, scratch;
+        nn.forward(input, outBuf, scratch);
+
+        ASSERT(outAlloc.size() == outBuf.size());
+        bool match = true;
+        for (size_t i = 0; i < outAlloc.size(); ++i)
+            if (std::fabs(outAlloc[i] - outBuf[i]) > 1e-6f) match = false;
+        ASSERT(match);
+    }
+
+    // Second call reuses buffers — must still be correct
+    {
+        NeuralNetwork nn(defaultTopology(), 7);
+        std::vector<float> input((size_t)defaultTopology()[0], 0.5f);
+        std::vector<float> outBuf, scratch;
+        nn.forward(input, outBuf, scratch);
+        auto first = outBuf;
+        nn.forward(input, outBuf, scratch);
+        ASSERT(first.size() == outBuf.size());
+        bool match = true;
+        for (size_t i = 0; i < first.size(); ++i)
+            if (std::fabs(first[i] - outBuf[i]) > 1e-6f) match = false;
+        ASSERT(match);
+    }
+}
+
 // ---------- E1: Spatial grid raycast and isInsideTrack correctness ----------
 static float bruteRaycast(const Track& track, Vec2 origin, Vec2 dir, float maxLen) {
     float best = maxLen;
@@ -988,6 +1026,9 @@ int main() {
 
     test_training_determinism();
     std::cout << "T7 Training determinism (all aggregators): ok\n";
+
+    test_nn_forward_no_alloc();
+    std::cout << "E2 NN forward without allocations: ok\n";
 
     test_track_spatial_grid();
     std::cout << "E1 Spatial grid raycast/isInsideTrack correctness: ok\n";

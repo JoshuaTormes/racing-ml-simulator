@@ -25,8 +25,13 @@ public:
     explicit NeuralNetwork(std::vector<int> topology = defaultTopology(),
                            unsigned seed = 0);
 
-    // Forward pass: input vector → output vector (tanh, so output ∈ (-1,1))
+    // Forward pass (allocating): input → output (tanh, output ∈ (-1,1))
     std::vector<float> forward(const std::vector<float>& input) const;
+    // Forward pass (buffer-reusing): uses output and scratch as ping-pong buffers.
+    // Resize is only done when needed; avoids heap allocation on the hot path.
+    void forward(const std::vector<float>& input,
+                 std::vector<float>& output,
+                 std::vector<float>& scratch) const;
 
     // Flat weight/bias vector access (for GA crossover/mutation)
     std::vector<float> getWeights() const;
@@ -55,7 +60,6 @@ class NeuralNetworkController : public AIController {
 public:
     explicit NeuralNetworkController(NeuralNetwork nn) : nn_(std::move(nn)) {}
 
-    // Convert Observation → NN forward → Action
     Action decide(const Observation& obs) override;
     void   reset() override {}
 
@@ -64,4 +68,5 @@ public:
 
 private:
     NeuralNetwork nn_;
+    mutable std::vector<float> input_, output_, scratch_;
 };
