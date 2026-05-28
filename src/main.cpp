@@ -45,7 +45,7 @@ static void printUsage(const char* argv0) {
         << "Usage: " << argv0 << " [options]\n"
         << "\nBasic\n"
         << "  --headless            Run without window\n"
-        << "  --map <path>          Map JSON for watch/single-map train (default: maps/map1.json)\n"
+        << "  --map <path>          Map JSON for watch/single-map train (default: maps/map1_chicanes_infernais.json)\n"
         << "  --population <N>      Number of cars (default: 1)\n"
         << "  --seed <S>            RNG seed (default: 42)\n"
         << "  --threads <K>         Thread count (default: hardware_concurrency)\n"

@@ -12,8 +12,5 @@
     [50,  400],
     [100, 200]
   ],
-  "obstacles": [
-    { "type": "circle", "pos": [400, 360], "radius": 30 },
-    { "type": "rect",   "pos": [580, 280], "size": [40, 80] }
-  ]
+  "obstacles": []
 }
