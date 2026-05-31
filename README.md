@@ -24,34 +24,87 @@ A motivação central não é o jogo em si, mas a qualidade da arquitetura como 
 
 ## Requisitos
 
-| Dependência | Versão mínima | Como instalar |
-|---|---|---|
-| macOS | 13+ (Ventura) | — |
-| Xcode Command Line Tools | 15+ | `xcode-select --install` |
-| CMake | 3.16+ | `brew install cmake` |
-| SFML | **3.x** | `brew install sfml` |
-| nlohmann/json | 3.11.3 | Baixado automaticamente pelo CMake |
+| Dependência | Versão mínima |
+|---|---|
+| Compilador C++17 | clang 14+ / gcc 11+ / MSVC 2022 |
+| CMake | 3.16+ |
+| SFML | **3.x** |
+| nlohmann/json | 3.11.3 (baixado automaticamente pelo CMake) |
 
 > **Atenção:** o projeto usa a API do **SFML 3** (eventos com `std::optional`, enums com escopo, `sf::Text` com fonte no construtor). Não é compatível com SFML 2.
+
+O projeto roda em **macOS, Linux e Windows** — não há nenhuma dependência de plataforma no código.
 
 ---
 
 ## Instalação e Build
 
-```bash
-# 1. Clone ou entre no diretório do projeto
-cd racing-ml-sim
+### macOS
 
-# 2. Instale as dependências (se ainda não instalou)
+```bash
+xcode-select --install
 brew install cmake sfml
 
-# 3. Configure e compile em Release
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(sysctl -n hw.logicalcpu)
-
-# O binário fica em:
 ./build/racing_sim
 ```
+
+### Linux
+
+**Ubuntu 24.04+ / Debian 13+**
+```bash
+sudo apt install build-essential cmake libsfml-dev
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+./build/racing_sim
+```
+
+**Arch Linux**
+```bash
+sudo pacman -S cmake sfml
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+./build/racing_sim
+```
+
+**Fedora**
+```bash
+sudo dnf install cmake gcc-c++ SFML-devel
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+./build/racing_sim
+```
+
+> Em distros mais antigas (ex: Ubuntu 22.04), o `libsfml-dev` pode instalar o SFML 2. Verifique com `apt show libsfml-dev | grep Version`. Se for 2.x, [compile o SFML 3 do fonte](https://github.com/SFML/SFML) ou use uma distro mais recente.
+
+### Windows
+
+**Visual Studio 2022 + vcpkg**
+```powershell
+# Instale o Visual Studio 2022 com o workload "Desenvolvimento para Desktop com C++"
+# Instale vcpkg: https://github.com/microsoft/vcpkg
+vcpkg install sfml
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release `
+      -DCMAKE_TOOLCHAIN_FILE=<vcpkg-root>/scripts/buildsystems/vcpkg.cmake
+cmake --build build --config Release
+# Binário: build\Release\racing_sim.exe
+```
+
+**MSYS2 / MinGW-w64**
+```bash
+pacman -S mingw-w64-x86_64-cmake mingw-w64-x86_64-sfml
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G "MinGW Makefiles"
+cmake --build build -j$(nproc)
+./build/racing_sim.exe
+```
+
+---
 
 A build baixa `nlohmann/json` automaticamente via `FetchContent` na primeira execução do cmake — é necessário acesso à internet nessa etapa.
 
