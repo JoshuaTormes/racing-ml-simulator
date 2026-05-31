@@ -214,7 +214,7 @@ Quando `headless: false` no `train.json` (ou sem `--headless`), a janela abre pa
 ./build/racing_sim --train
 ```
 
-Com múltiplos mapas, a janela alterna automaticamente entre os mapas de treino. Pressione **`T`** para alternar entre **tempo real** (60 Hz) e **turbo** (máxima velocidade).
+Com múltiplos mapas, a janela alterna automaticamente entre os mapas de treino.
 
 ### Modo janela (explorar / jogar)
 
@@ -282,10 +282,11 @@ Mede throughput de simulação e sai.
 | `S` / `↓` | default, `--versus` | Frear |
 | `A` / `←` | default, `--versus` | Virar à esquerda |
 | `D` / `→` | default, `--versus` | Virar à direita |
-| `T` | `--train` | Alternar tempo real ↔ turbo |
 | `< Mapa` / `Mapa >` | todos (janela) | Trocar de pista |
 | Restart | todos (janela) | Reiniciar episódio |
 | Fechar janela | todos | Encerrar |
+
+**Controle de velocidade de simulação (`--train` com janela):** no canto superior da janela há um campo de texto exibindo o multiplicador atual (ex: `1x`). Clique nele, digite o valor desejado (mínimo `1`, máximo `100000`) e pressione Enter ou clique fora para confirmar. A simulação roda na velocidade que o hardware aguentar — valores como `25000` são comuns para treinos rápidos com visualização.
 
 O carro 0 (amarelo) exibe os **raios de sensor**: verde = distância longa, vermelho = perto da borda. Em `--versus`, amarelo = você, verde = IA.
 

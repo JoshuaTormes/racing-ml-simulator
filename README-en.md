@@ -213,7 +213,7 @@ When `headless: false` in `train.json` (or without `--headless`), a window opens
 ./build/racing_sim --train
 ```
 
-With multiple maps, the window automatically cycles through the training maps. Press **`T`** to toggle between **real-time** (60 Hz) and **turbo** (maximum speed).
+With multiple maps, the window automatically cycles through the training maps.
 
 ### Window mode (explore / play)
 
@@ -277,14 +277,17 @@ Measures simulation throughput and exits.
 
 | Key | Mode | Action |
 |---|---|---|
-| `W` / `↑` | default | Accelerate |
-| `S` / `↓` | default | Brake / reverse |
-| `A` / `←` | default | Steer left |
-| `D` / `→` | default | Steer right |
-| `T` | `--train` | Toggle real-time ↔ turbo |
+| `W` / `↑` | default, `--versus` | Accelerate |
+| `S` / `↓` | default, `--versus` | Brake |
+| `A` / `←` | default, `--versus` | Steer left |
+| `D` / `→` | default, `--versus` | Steer right |
+| `< Map` / `Map >` | all (windowed) | Switch track |
+| Restart | all (windowed) | Restart episode |
 | Close window | all | Quit |
 
-Car 0 (yellow) displays **sensor rays**: green = long distance, red = close to edge.
+**Simulation speed control (`--train` with window):** a text field in the top bar shows the current multiplier (e.g. `1x`). Click it, type the desired value (min `1`, max `100000`), then press Enter or click away to confirm. The simulation runs as fast as the hardware allows — values like `25000` are common for fast training with visualisation.
+
+Car 0 (yellow) displays **sensor rays**: green = long distance, red = close to edge. In `--versus`, yellow = you, green = AI.
 
 ---
 
