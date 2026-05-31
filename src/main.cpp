@@ -5,6 +5,7 @@
 #include "Trainers.h"
 #include "Training.h"
 #include <iostream>
+#include <fstream>
 #include <random>
 #include <string>
 #include <thread>
@@ -13,6 +14,9 @@
 #include <algorithm>
 #include <sstream>
 #include <stdexcept>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 static std::vector<std::string> listMaps(const std::string& dir) {
     std::vector<std::string> v;
@@ -38,6 +42,88 @@ static std::vector<std::string> splitComma(const std::string& s) {
     while (std::getline(ss, tok, ','))
         if (!tok.empty()) out.push_back(tok);
     return out;
+}
+
+// Joins a JSON string-array into a comma-separated string (same format the CLI expects).
+static std::string jsonArrayToComma(const json& v) {
+    std::string out;
+    if (v.is_array()) {
+        for (const auto& e : v) { if (!out.empty()) out += ","; out += e.get<std::string>(); }
+    } else {
+        out = v.get<std::string>();
+    }
+    return out;
+}
+
+// Apply values from a config JSON object to all CLI variables.
+// Called before the CLI parsing loop — subsequent CLI flags overwrite these values.
+static void applyConfig(const json& j,
+                        SimConfig& cfg, bool& train, std::string& algo,
+                        int& generations, std::string& outDir,
+                        std::string& loadPath,
+                        std::string& trainMapsArg, bool& explicitTrainMaps,
+                        std::string& valMapsArg,   std::string& testMapsArg,
+                        std::string& fitnessAggArg, float& cvarAlpha,
+                        std::string& mapNormArg,   std::string& curriculumArg,
+                        int& currStart, int& currStep, std::string& currScheduleArg,
+                        int& hiddenOverride, bool& logCsv, float& episodeTimeoutArg,
+                        std::string& curriculumPinArg, std::string& mapWeightsArg,
+                        float& progressiveFrac, std::string& finetuneMapArg,
+                        bool& selectByVal, int& valSelectTopK,
+                        int& episodesPerEval, bool& randomSpawn, float& sensorNoise,
+                        std::string& episodeAggArg, std::string& augmentArg,
+                        std::string& dumpGenMapsDir,
+                        int& proceduralTrain, int& proceduralVal,
+                        float& procWidthMin, float& procWidthMax) {
+    // Basic
+    if (j.contains("population"))    cfg.population       = j["population"].get<int>();
+    if (j.contains("seed"))          cfg.seed             = j["seed"].get<unsigned>();
+    if (j.contains("threads"))       cfg.threads          = j["threads"].get<int>();
+    if (j.contains("headless"))      cfg.headless         = j["headless"].get<bool>();
+    if (j.contains("map"))           cfg.map              = j["map"].get<std::string>();
+    // Training
+    if (j.contains("train"))         train                = j["train"].get<bool>();
+    if (j.contains("algo"))          algo                 = j["algo"].get<std::string>();
+    if (j.contains("generations"))   generations          = j["generations"].get<int>();
+    if (j.contains("out"))           outDir               = j["out"].get<std::string>();
+    if (j.contains("load"))          loadPath             = j["load"].get<std::string>();
+    if (j.contains("log_csv"))       logCsv               = j["log_csv"].get<bool>();
+    if (j.contains("hidden"))        hiddenOverride       = j["hidden"].get<int>();
+    if (j.contains("episode_timeout")) episodeTimeoutArg  = j["episode_timeout"].get<float>();
+    // Maps
+    if (j.contains("train_maps")) {
+        trainMapsArg = jsonArrayToComma(j["train_maps"]);
+        if (!trainMapsArg.empty()) explicitTrainMaps = true;
+    }
+    if (j.contains("val_maps"))      valMapsArg           = jsonArrayToComma(j["val_maps"]);
+    if (j.contains("test_maps"))     testMapsArg          = jsonArrayToComma(j["test_maps"]);
+    // Fitness aggregation
+    if (j.contains("fitness_agg"))   fitnessAggArg        = j["fitness_agg"].get<std::string>();
+    if (j.contains("cvar_alpha"))    cvarAlpha            = j["cvar_alpha"].get<float>();
+    if (j.contains("map_norm"))      mapNormArg           = j["map_norm"].get<std::string>();
+    if (j.contains("map_weights"))   mapWeightsArg        = jsonArrayToComma(j["map_weights"]);
+    if (j.contains("progressive_frac")) progressiveFrac   = j["progressive_frac"].get<float>();
+    if (j.contains("finetune_map"))  finetuneMapArg       = j["finetune_map"].get<std::string>();
+    // Curriculum
+    if (j.contains("curriculum"))    curriculumArg        = j["curriculum"].get<std::string>();
+    if (j.contains("curriculum_start")) currStart         = j["curriculum_start"].get<int>();
+    if (j.contains("curriculum_step"))  currStep          = j["curriculum_step"].get<int>();
+    if (j.contains("curriculum_schedule")) currScheduleArg = jsonArrayToComma(j["curriculum_schedule"]);
+    if (j.contains("curriculum_pin")) curriculumPinArg    = jsonArrayToComma(j["curriculum_pin"]);
+    // Anti-overfitting
+    if (j.contains("augment"))       augmentArg           = jsonArrayToComma(j["augment"]);
+    if (j.contains("dump_gen_maps")) dumpGenMapsDir       = j["dump_gen_maps"].get<std::string>();
+    if (j.contains("procedural_train")) proceduralTrain   = j["procedural_train"].get<int>();
+    if (j.contains("procedural_val"))   proceduralVal     = j["procedural_val"].get<int>();
+    if (j.contains("proc_width_min"))   procWidthMin      = j["proc_width_min"].get<float>();
+    if (j.contains("proc_width_max"))   procWidthMax      = j["proc_width_max"].get<float>();
+    if (j.contains("random_spawn"))  randomSpawn          = j["random_spawn"].get<bool>();
+    if (j.contains("sensor_noise"))  sensorNoise          = j["sensor_noise"].get<float>();
+    if (j.contains("episodes_per_eval")) episodesPerEval  = j["episodes_per_eval"].get<int>();
+    if (j.contains("episode_agg"))   episodeAggArg        = j["episode_agg"].get<std::string>();
+    // Model selection
+    if (j.contains("select_by_val")) selectByVal          = j["select_by_val"].get<bool>();
+    if (j.contains("val_select_topk")) valSelectTopK      = j["val_select_topk"].get<int>();
 }
 
 static void printUsage(const char* argv0) {
@@ -96,7 +182,12 @@ static void printUsage(const char* argv0) {
         << "    all *.json in maps/, sorted; first 6 = train, last 2 = val (reproducible split).\n"
         << "  Single-map compat: --map without --train-maps trains only on that map.\n"
         << "\n  Baseline (old behaviour) reproducible with:\n"
-        << "    --fitness-agg min --map-norm progress --curriculum none\n";
+        << "    --fitness-agg min --map-norm progress --curriculum none\n"
+        << "\nConfig file\n"
+        << "  --config <file.json>  Load defaults from JSON file (CLI flags override)\n"
+        << "  Auto-detected: train.json in the current directory if it exists\n"
+        << "  Keys match flag names with underscores: population, train_maps, cvar_alpha...\n"
+        << "  Arrays accepted for train_maps, val_maps, test_maps, augment, map_weights\n";
 }
 
 static std::vector<float> loadChampion(const std::string& path) {
@@ -175,6 +266,43 @@ int main(int argc, char* argv[]) {
     float       procWidthMin      = -1.f;  // -1 = use generator default
     float       procWidthMax      = -1.f;
 
+    // ---- Config file: auto-detect train.json or use --config <file> -----------
+    {
+        std::string configPath;
+        for (int i = 1; i < argc; ++i) {
+            if (std::string(argv[i]) == "--config" && i + 1 < argc) {
+                configPath = argv[i + 1];
+                break;
+            }
+        }
+        if (configPath.empty() && std::filesystem::exists("train.json"))
+            configPath = "train.json";
+
+        if (!configPath.empty()) {
+            std::ifstream f(configPath);
+            if (!f) {
+                std::cerr << "Cannot open config file: " << configPath << "\n";
+                return 1;
+            }
+            try {
+                json j = json::parse(f);
+                applyConfig(j, cfg, train, algo, generations, outDir, loadPath,
+                            trainMapsArg, explicitTrainMaps, valMapsArg, testMapsArg,
+                            fitnessAggArg, cvarAlpha, mapNormArg, curriculumArg,
+                            currStart, currStep, currScheduleArg,
+                            hiddenOverride, logCsv, episodeTimeoutArg,
+                            curriculumPinArg, mapWeightsArg, progressiveFrac, finetuneMapArg,
+                            selectByVal, valSelectTopK, episodesPerEval, randomSpawn,
+                            sensorNoise, episodeAggArg, augmentArg, dumpGenMapsDir,
+                            proceduralTrain, proceduralVal, procWidthMin, procWidthMax);
+                std::cerr << "[config] Loaded " << configPath << "\n";
+            } catch (const std::exception& e) {
+                std::cerr << "Error parsing config file " << configPath << ": " << e.what() << "\n";
+                return 1;
+            }
+        }
+    }
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         try {
@@ -220,6 +348,7 @@ int main(int argc, char* argv[]) {
             else if (arg == "--map-weights"      && i+1 < argc) mapWeightsArg     = argv[++i];
             else if (arg == "--progressive-frac" && i+1 < argc) progressiveFrac   = std::stof(argv[++i]);
             else if (arg == "--finetune-map"     && i+1 < argc) finetuneMapArg    = argv[++i];
+            else if (arg == "--config"       && i+1 < argc) ++i; // already consumed above
             else if (arg == "--help" || arg == "-h")             showHelp          = true;
             else { std::cerr << "Unknown option: " << arg << "\n"; showHelp = true; }
         } catch (const std::exception& e) {
