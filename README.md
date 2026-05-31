@@ -11,13 +11,14 @@ A motivação central não é o jogo em si, mas a qualidade da arquitetura como 
 1. [Requisitos](#requisitos)
 2. [Instalação e Build](#instalação-e-build)
 3. [Modos de Execução](#modos-de-execução)
-4. [Controles (modo janela)](#controles-modo-janela)
-5. [Opções de linha de comando](#opções-de-linha-de-comando)
-6. [Testes](#testes)
-7. [Criando novos mapas](#criando-novos-mapas)
-8. [Plugando um algoritmo de ML](#plugando-um-algoritmo-de-ml)
-9. [Constantes configuráveis](#constantes-configuráveis)
-10. [Estrutura de arquivos](#estrutura-de-arquivos)
+4. [Arquivo de configuração (train.json)](#arquivo-de-configuração-trainjson)
+5. [Controles (modo janela)](#controles-modo-janela)
+6. [Opções de linha de comando](#opções-de-linha-de-comando)
+7. [Testes](#testes)
+8. [Criando novos mapas](#criando-novos-mapas)
+9. [Plugando um algoritmo de ML](#plugando-um-algoritmo-de-ml)
+10. [Constantes configuráveis](#constantes-configuráveis)
+11. [Estrutura de arquivos](#estrutura-de-arquivos)
 
 
 ---
@@ -112,66 +113,57 @@ A build baixa `nlohmann/json` automaticamente via `FetchContent` na primeira exe
 
 ## Modos de Execução
 
-### Modo janela (padrão)
+### Treinamento (modo principal)
 
-Abre uma janela 900×700. O **carro 0** (amarelo) é controlado pelo teclado; os demais têm redes neurais com pesos aleatórios.
-
-```bash
-./build/racing_sim
-./build/racing_sim --population 10   # mais carros com NN aleatória
-```
-
-### Treinamento headless (mais rápido — paralelo)
-
-Loop geracional sem janela. Todos os **M mapas × P carros** de uma geração são avaliados em paralelo num pool de threads — sem recarregar mapas entre gerações.
+Configure tudo em `train.json` e rode:
 
 ```bash
-# 1000 carros, 5000 gerações (recomendado para treino sério)
-./build/racing_sim --train --headless --population 1000 --generations 5000
-
-# Controlar número de threads (default: todos os cores disponíveis)
-./build/racing_sim --train --headless --population 1000 --generations 5000 --threads 8
-
-# Controlar seed e pasta de saída
-./build/racing_sim --train --headless --seed 123 --out resultados/
-
-# Retomar a partir de um campeão salvo
-./build/racing_sim --train --headless --load out/best.rnnw --generations 5000
+./build/racing_sim --train
 ```
+
+O simulador detecta e carrega `train.json` automaticamente se o arquivo existir na pasta atual. Flags CLI sobrescrevem qualquer valor do arquivo:
+
+```bash
+./build/racing_sim --train --load out_v2/best.rnnw      # retomar do checkpoint
+./build/racing_sim --train --generations 100             # override pontual
+./build/racing_sim --train --config experimento_b.json  # config alternativa
+```
+
+Com `headless: true` no `train.json` (ou `--headless` na CLI), o treino roda sem janela — muito mais rápido para populações grandes, pois todos os **M mapas × P carros** são avaliados em paralelo num pool de threads.
 
 Saída no terminal (uma linha por geração):
 
 ```
-gen    1/5000  agg= -0.308 | m0= 0.333 m1= 0.151 m2= 0.067 m3= 0.037 m4= 0.082 m5= 0.021 |  mean= -0.798  std= 0.242  done=0/1000  [col=480 stall=520 timeout=0]
-gen    2/5000  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 m3= 0.412 m4= 0.056 m5= 0.206 |  mean= -0.241  std= 0.381  done=8/1000  [col=320 stall=672 timeout=0]
+gen    1/1500  agg= -0.308 | m0= 0.333 m1= 0.151 m2= 0.067 |  mean= -0.798  std= 0.242  done=0/1000  [col=480 stall=520 timeout=0]
+gen    2/1500  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 |  mean= -0.241  std= 0.381  done=8/1000  [col=320 stall=672 timeout=0]
 ...
 ```
 
 Colunas: `agg` = fitness agregado (modo configurável via `--fitness-agg`), `m0..mN` = melhor fitness normalizado por mapa, `done` = carros que completaram o circuito.
 
-### Treinamento multi-mapa (generalização)
+Arquivos gerados no diretório definido em `out`:
 
-Treina em vários mapas simultaneamente para produzir um agente que generaliza, em vez de memorizar um único circuito.
+| Arquivo | Conteúdo |
+|---|---|
+| `best.rnnw` | Pesos do **campeão global** (sobrescrito quando há novo melhor) |
+| `gen_0001.rnnw` … `gen_NNNN.rnnw` | Snapshot do melhor da geração N |
+| `training_log.csv` | Métricas de treino por geração (requer `--log-csv`) |
+| `held_out_log.csv` | Métricas de validação por geração (requer `--log-csv`) |
+| `test_log.csv` | Métricas do conjunto de teste (requer `--log-csv` + `test_maps`) |
+
+### Treinamento com janela (visualização)
+
+Quando `headless: false` no `train.json` (ou sem `--headless`), a janela abre para acompanhar a evolução ao vivo. **Atenção:** o modo janela é serial — os mapas são percorridos um por um em sincronia com o render.
 
 ```bash
-# Automático: usa todos os *.json em maps/, split 6 treino / 2 val
-./build/racing_sim --train --headless --population 200 --generations 150
-
-# Explicitar os mapas de treino e validação
-./build/racing_sim --train --headless \
-  --train-maps maps/map1.json,maps/map2.json,maps/map3.json \
-  --val-maps   maps/map4.json,maps/map5.json \
-  --generations 100
-
-# Usar média em vez de mínimo para o fitness agregado
-./build/racing_sim --train --headless --fitness-agg mean --generations 100
+./build/racing_sim --train
 ```
 
-O **fitness agregado** (coluna `agg=` no terminal) é por padrão **`cvar-rank`** — rank-CVaR entre mapas, que penaliza agentes inconsistentes sem ignorar mapas difíceis. Outras opções: `min` (força o pior mapa a subir), `mean` (mais tolerante) e `cvar-raw` (CVaR direto sobre valores de fitness).
+Com múltiplos mapas, a janela alterna automaticamente entre os mapas de treino. Pressione **`T`** para alternar entre **tempo real** (60 Hz) e **turbo** (máxima velocidade).
 
-#### Combatendo overfitting (diversidade, anti-memorização e seleção por held-out)
+### Combatendo overfitting (diversidade, anti-memorização e seleção por held-out)
 
-Quando o agente decora os mapas de treino mas falha em pistas novas, há quatro alavancas (todas opcionais, **desligadas por padrão**):
+Quando o agente decora os mapas de treino mas falha em pistas novas, há quatro alavancas configuráveis via `train.json` ou CLI:
 
 ```bash
 ./build/racing_sim --train --headless --population 1000 --generations 1000 \
@@ -186,49 +178,45 @@ Quando o agente decora os mapas de treino mas falha em pistas novas, há quatro 
 - **A — diversidade:** `--procedural-train K` / `--procedural-val K` geram K pistas aleatórias (determinísticas pela seed); `--proc-width-min/--proc-width-max` controlam a faixa de largura.
 - **B — augmentation:** `--augment mirror,reverse,width:<f>` adiciona variantes de cada mapa base ao treino.
 - **C — anti-memorização:** `--random-spawn` (início aleatório na pista; progresso medido relativo ao spawn), `--episodes-per-eval N` (+ `--episode-agg mean|min`), `--sensor-noise <σ>`.
-- **D — seleção por held-out:** `--select-by-val` salva `best.rnnw` pelo **melhor desempenho na validação** (entre os top-K do treino), em vez do fitness de treino. `--test-maps` é **só relatório** (nunca usado na seleção) — gera `test_log.csv`.
+- **D — seleção por held-out:** `--select-by-val` salva `best.rnnw` pelo **melhor desempenho na validação** (entre os top-K do treino), em vez do fitness de treino. `--test-maps` é **só relatório** (nunca usado na seleção).
 
 Acompanhe a curva de validação/teste ao vivo com `python3 tools/watch_training.py <out_dir>`.
 
-Arquivos gerados em `out/` (ou `--out <dir>`):
+### Modo janela (explorar / jogar)
 
-| Arquivo | Conteúdo |
-|---|---|
-| `best.rnnw` | Pesos do **campeão global** (sobrescrito quando há novo melhor) |
-| `gen_0001.rnnw` … `gen_NNNN.rnnw` | Snapshot do melhor da geração N |
-
-### Treinamento com janela (serial — visualização)
-
-Igual ao headless, mas abre a janela para assistir à evolução ao vivo. **Atenção:** o modo janela é serial — os mapas são percorridos um por um em sincronia com o render. Para treinos grandes use `--headless`.
+Abre uma janela 900×700. O **carro 0** (amarelo) é controlado pelo teclado; os demais têm redes neurais com pesos aleatórios.
 
 ```bash
-./build/racing_sim --train --population 100 --generations 200
+./build/racing_sim
+./build/racing_sim --population 10   # mais carros com NN aleatória
 ```
-
-Com múltiplos mapas, a janela alterna automaticamente entre os mapas de treino ao longo de cada geração — o nome do mapa atual aparece na tela. Pressione **`T`** para alternar entre **tempo real** (60 Hz) e **turbo** (máxima velocidade).
 
 ### Assistir uma rede treinada
 
 Carrega um arquivo `.rnnw` e abre a janela com 1 carro dirigindo em loop.
 
 ```bash
-./build/racing_sim --watch out/best.rnnw
+./build/racing_sim --watch out_v2/best.rnnw
 # ou equivalente:
-./build/racing_sim --load  out/best.rnnw
+./build/racing_sim --load out_v2/best.rnnw
 ```
 
 ### Human vs AI
 
-Você controla o carro amarelo; a rede salva controla o verde. Use `←→↑↓` ou `WASD`.
+Você controla o carro amarelo; a rede salva controla o(s) verde(s). Use `←→↑↓` ou `WASD`.
 
 ```bash
-./build/racing_sim --versus out/best.rnnw
+./build/racing_sim --versus out_v2/best.rnnw
+
+# Múltiplos AIs (--population N), com ruído nos pesos para divergirem entre si:
+./build/racing_sim --versus out_v2/best.rnnw --population 5
+./build/racing_sim --versus out_v2/best.rnnw --population 5 --versus-noise 0.05
 
 # Em um mapa específico:
-./build/racing_sim --versus out/best.rnnw --map maps/map3.json
+./build/racing_sim --versus out_v2/best.rnnw --map maps/map3.json
 ```
 
-A corrida reinicia automaticamente quando os dois terminam. Pressione **Restart** (ou `R`) para recomeçar a qualquer momento.
+A corrida reinicia automaticamente quando todos terminam. Pressione **Restart** (ou `R`) para recomeçar a qualquer momento.
 
 ### Modo headless sem treino
 
@@ -245,16 +233,62 @@ Mede throughput de simulação e sai.
 ```bash
 ./build/racing_sim --benchmark --population 1000
 
-# Exemplo de saída:
-# Benchmark: population=1000 threads=8
-#   Wall-clock: 0.48s  (~3600000 car-ticks total)
-```
-
-```bash
 # Comparar single vs multi-thread
 ./build/racing_sim --benchmark --population 1000 --threads 1
 ./build/racing_sim --benchmark --population 1000 --threads 8
 ```
+
+---
+
+## Arquivo de configuração (train.json)
+
+Em vez de passar todos os flags na linha de comando, coloque os defaults em `train.json` na raiz do projeto. O simulador detecta e carrega o arquivo automaticamente; flags CLI sobrescrevem qualquer valor do arquivo.
+
+```json
+{
+  "population": 1000,
+  "generations": 1500,
+  "threads": 8,
+  "seed": 42,
+  "headless": true,
+  "out": "out_v2",
+  "log_csv": true,
+
+  "train_maps": [
+    "maps/map1_chicanes_infernais.json",
+    "maps/map4_obstaculos.json",
+    "maps/map5_tecnico_avancado.json"
+  ],
+  "val_maps": ["maps/map7_pesadelo.json"],
+  "test_maps": ["maps/map8_caos_total.json"],
+
+  "fitness_agg": "cvar-rank",
+  "cvar_alpha": 1.0,
+  "curriculum": "none",
+
+  "augment": ["mirror", "reverse"],
+  "procedural_train": 4,
+  "proc_width_min": 60,
+  "proc_width_max": 80,
+
+  "random_spawn": true,
+  "episodes_per_eval": 2,
+
+  "select_by_val": true,
+  "val_select_topk": 10
+}
+```
+
+Com esse arquivo, o treino completo vira:
+
+```bash
+./build/racing_sim --train                              # tudo vem do train.json
+./build/racing_sim --train --load out_v2/best.rnnw      # retomar do checkpoint
+./build/racing_sim --train --generations 100            # override pontual
+./build/racing_sim --train --config experimento_b.json  # config alternativa
+```
+
+As chaves do JSON usam underscore e espelham os flags CLI: `train_maps`, `cvar_alpha`, `random_spawn`, `episodes_per_eval`, etc. Arrays são aceitos em `train_maps`, `val_maps`, `test_maps`, `augment` e `map_weights`.
 
 ---
 
@@ -296,7 +330,7 @@ Treinamento
   --generations <N>       Número de gerações (default: 100)
   --out <dir>             Diretório de saída dos pesos (default: out/)
   --load <arquivo.rnnw>   Com --train: semeia população do campeão. Sem --train: abre modo watch
-  --log-csv               Salva métricas por geração em <out>/log.csv
+  --log-csv               Salva training_log.csv, held_out_log.csv (e test_log.csv se --test-maps) em <out>
   --hidden <N>            Neurônios na camada oculta (default: 32; exige recompilar se mudar Constants.h)
   --episode-timeout <s>   Duração máxima de um episódio em segundos (default: 30)
 
@@ -313,7 +347,7 @@ Generalização multi-mapa
   --finetune-map <path>   Substitui map[0] por este JSON — útil para refinar em nova pista sem retreinar tudo
 
 Curriculum (desligado por padrão)
-  --curriculum <modo>     none (default) | linear | explicit
+  --curriculum <modo>     linear (default) | none | explicit
   --curriculum-start <N>  Geração em que o segundo mapa entra (linear, default: 2)
   --curriculum-step <N>   Gerações entre adição de cada mapa subsequente (linear, default: 15)
   --curriculum-schedule <g,...>  Thresholds de geração para modo explicit (M−1 valores)
@@ -341,56 +375,6 @@ Watch / Interativo
 ```
 
 **Precedência de modo:** `--benchmark` > `--watch` > `--versus` > `--train` > `--load` (sem train = watch) > modo janela padrão.
-
-### Config file (`train.json`)
-
-Em vez de passar todos os flags na linha de comando, coloque os defaults em `train.json` na raiz do projeto. O simulador carrega o arquivo automaticamente; flags CLI sobrescrevem qualquer valor do arquivo.
-
-```json
-{
-  "population": 1000,
-  "generations": 1500,
-  "threads": 8,
-  "seed": 42,
-  "headless": true,
-  "out": "out_v2",
-  "log_csv": true,
-
-  "train_maps": [
-    "maps/map1_chicanes_infernais.json",
-    "maps/map4_obstaculos.json",
-    "maps/map5_tecnico_avancado.json"
-  ],
-  "val_maps": ["maps/map7_pesadelo.json"],
-  "test_maps": ["maps/map8_caos_total.json"],
-
-  "fitness_agg": "cvar-rank",
-  "cvar_alpha": 1.0,
-  "curriculum": "none",
-
-  "augment": ["mirror", "reverse"],
-  "procedural_train": 4,
-  "proc_width_min": 60,
-  "proc_width_max": 80,
-
-  "random_spawn": true,
-  "episodes_per_eval": 2,
-
-  "select_by_val": true,
-  "val_select_topk": 10
-}
-```
-
-Com esse arquivo, o treino completo vira:
-
-```bash
-./build/racing_sim --train                              # tudo vem do train.json
-./build/racing_sim --train --load out_v2/best.rnnw      # retoma do checkpoint
-./build/racing_sim --train --generations 100            # override pontual
-./build/racing_sim --train --config experimento_b.json  # config alternativa
-```
-
-As chaves do JSON usam underscore e espelham os flags CLI: `train_maps`, `cvar_alpha`, `random_spawn`, `episodes_per_eval`, etc. Arrays são aceitos em `train_maps`, `val_maps`, `test_maps`, `augment` e `map_weights`.
 
 ---
 

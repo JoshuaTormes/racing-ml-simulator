@@ -11,13 +11,14 @@ The core motivation is not the game itself, but the quality of the architecture 
 1. [Requirements](#requirements)
 2. [Installation & Build](#installation--build)
 3. [Execution Modes](#execution-modes)
-4. [Controls (window mode)](#controls-window-mode)
-5. [Command-line Options](#command-line-options)
-6. [Tests](#tests)
-7. [Creating New Maps](#creating-new-maps)
-8. [Plugging in an ML Algorithm](#plugging-in-an-ml-algorithm)
-9. [Configurable Constants](#configurable-constants)
-10. [File Structure](#file-structure)
+4. [Configuration File (train.json)](#configuration-file-trainjson)
+5. [Controls (window mode)](#controls-window-mode)
+6. [Command-line Options](#command-line-options)
+7. [Tests](#tests)
+8. [Creating New Maps](#creating-new-maps)
+9. [Plugging in an ML Algorithm](#plugging-in-an-ml-algorithm)
+10. [Configurable Constants](#configurable-constants)
+11. [File Structure](#file-structure)
 
 ---
 
@@ -111,7 +112,76 @@ The build downloads `nlohmann/json` automatically via `FetchContent` on the firs
 
 ## Execution Modes
 
-### Window mode (default)
+### Training (primary mode)
+
+Configure everything in `train.json` and run:
+
+```bash
+./build/racing_sim --train
+```
+
+The simulator auto-detects and loads `train.json` if it exists in the current directory. CLI flags override any value from the file:
+
+```bash
+./build/racing_sim --train --load out_v2/best.rnnw      # resume from checkpoint
+./build/racing_sim --train --generations 100             # one-off override
+./build/racing_sim --train --config experiment_b.json   # alternate config
+```
+
+With `headless: true` in `train.json` (or `--headless` on the CLI), training runs without a window — much faster for large populations, since all **M maps × P cars** are evaluated in parallel using a worker thread pool.
+
+Terminal output (one line per generation):
+
+```
+gen    1/1500  agg= -0.308 | m0= 0.333 m1= 0.151 m2= 0.067 |  mean= -0.798  std= 0.242  done=0/1000  [col=480 stall=520 timeout=0]
+gen    2/1500  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 |  mean= -0.241  std= 0.381  done=8/1000  [col=320 stall=672 timeout=0]
+...
+```
+
+Columns: `agg` = aggregated fitness (mode configurable via `--fitness-agg`), `m0..mN` = best normalised fitness per map, `done` = cars that completed the circuit.
+
+Files generated in the directory set by `out`:
+
+| File | Content |
+|---|---|
+| `best.rnnw` | Weights of the **global champion** (overwritten when a new best is found) |
+| `gen_0001.rnnw` … `gen_NNNN.rnnw` | Snapshot of the best individual in generation N |
+| `training_log.csv` | Per-generation training metrics (requires `--log-csv`) |
+| `held_out_log.csv` | Per-generation validation metrics (requires `--log-csv`) |
+| `test_log.csv` | Test-set metrics (requires `--log-csv` + `test_maps`) |
+
+### Training with window (visualisation)
+
+When `headless: false` in `train.json` (or without `--headless`), a window opens to watch evolution live. **Note:** windowed mode is serial — maps are evaluated one at a time in sync with the renderer.
+
+```bash
+./build/racing_sim --train
+```
+
+With multiple maps, the window automatically cycles through the training maps. Press **`T`** to toggle between **real-time** (60 Hz) and **turbo** (maximum speed).
+
+### Anti-overfitting (diversity, anti-memorisation, and held-out selection)
+
+When the agent memorises the training maps but fails on new tracks, there are four levers configurable via `train.json` or CLI:
+
+```bash
+./build/racing_sim --train --headless --population 1000 --generations 1000 \
+  --train-maps maps/map1.json,maps/map4.json,maps/map5.json \
+  --augment mirror,reverse,width:0.85,width:1.15 \   # B) static variants of base maps
+  --procedural-train 8 \                              # A) seeded random tracks
+  --random-spawn --episodes-per-eval 3 --sensor-noise 0.02 \  # C) anti-memorisation
+  --val-maps maps/map7.json --test-maps maps/map8.json \
+  --select-by-val --val-select-topk 10                # D) best.rnnw chosen by validation
+```
+
+- **A — diversity:** `--procedural-train K` / `--procedural-val K` generate K seeded random tracks; `--proc-width-min/--proc-width-max` control the width range.
+- **B — augmentation:** `--augment mirror,reverse,width:<f>` adds transformed variants of each base map to the training set.
+- **C — anti-memorisation:** `--random-spawn` (random start; progress measured from spawn), `--episodes-per-eval N` (+ `--episode-agg mean|min`), `--sensor-noise <σ>`.
+- **D — held-out selection:** `--select-by-val` saves `best.rnnw` by **best validation performance** (top-K from training), instead of raw training fitness. `--test-maps` is **report-only** (never used in selection).
+
+Monitor validation/test curves live with `python3 tools/watch_training.py <out_dir>`.
+
+### Window mode (explore / play)
 
 Opens a 900×700 window. **Car 0** (yellow) is controlled by the keyboard; the others have neural networks with random weights.
 
@@ -120,60 +190,32 @@ Opens a 900×700 window. **Car 0** (yellow) is controlled by the keyboard; the o
 ./build/racing_sim --population 10   # more cars with random NNs
 ```
 
-### Headless training (fastest — parallel)
-
-Generational loop without a window. All **M maps × P cars** of a generation are evaluated in parallel using a worker thread pool — no map reloading between generations.
-
-```bash
-# 1000 cars, 5000 generations (recommended for serious training)
-./build/racing_sim --train --headless --population 1000 --generations 5000
-
-# Control thread count (default: all available cores)
-./build/racing_sim --train --headless --population 1000 --generations 5000 --threads 8
-
-# Control seed and output directory
-./build/racing_sim --train --headless --seed 123 --out results/
-
-# Resume from a saved champion
-./build/racing_sim --train --headless --load out/best.rnnw --generations 5000
-```
-
-Terminal output (one line per generation):
-
-```
-gen    1/5000  agg= -0.308 | m0= 0.333 m1= 0.151 m2= 0.067 m3= 0.037 m4= 0.082 m5= 0.021 |  mean= -0.798  std= 0.242  done=0/1000  [col=480 stall=520 timeout=0]
-gen    2/5000  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 m3= 0.412 m4= 0.056 m5= 0.206 |  mean= -0.241  std= 0.381  done=8/1000  [col=320 stall=672 timeout=0]
-...
-```
-
-Columns: `agg` = aggregated fitness (mode configurable via `--fitness-agg`), `m0..mN` = best normalised fitness per map, `done` = cars that completed the circuit.
-
-Files generated in `out/` (or `--out <dir>`):
-
-| File | Content |
-|---|---|
-| `best.rnnw` | Weights of the **global champion** (overwritten when a new best is found) |
-| `gen_0001.rnnw` … `gen_NNNN.rnnw` | Snapshot of the best individual in generation N |
-
-### Training with window (serial — visualisation)
-
-Same as headless, but opens a window to watch evolution live. **Note:** windowed mode is serial — maps are evaluated one at a time in sync with the renderer. Use `--headless` for large-scale training.
-
-```bash
-./build/racing_sim --train --population 100 --generations 200
-```
-
-With multiple maps, the window automatically cycles through the training maps within each generation — the current map name is shown on screen. Press **`T`** to toggle between **real-time** (60 Hz) and **turbo** (maximum speed).
-
 ### Watch a trained network
 
 Loads a `.rnnw` file and opens a window with 1 car driving in a loop.
 
 ```bash
-./build/racing_sim --watch out/best.rnnw
+./build/racing_sim --watch out_v2/best.rnnw
 # or equivalently:
-./build/racing_sim --load  out/best.rnnw
+./build/racing_sim --load out_v2/best.rnnw
 ```
+
+### Human vs AI
+
+You control the yellow car; the saved network drives the green one(s). Use `←→↑↓` or `WASD`.
+
+```bash
+./build/racing_sim --versus out_v2/best.rnnw
+
+# Multiple AIs (--population N), with weight noise so they diverge from each other:
+./build/racing_sim --versus out_v2/best.rnnw --population 5
+./build/racing_sim --versus out_v2/best.rnnw --population 5 --versus-noise 0.05
+
+# On a specific map:
+./build/racing_sim --versus out_v2/best.rnnw --map maps/map3.json
+```
+
+The race restarts automatically when everyone finishes. Press **Restart** (or `R`) to restart at any time.
 
 ### Headless mode without training
 
@@ -190,12 +232,6 @@ Measures simulation throughput and exits.
 ```bash
 ./build/racing_sim --benchmark --population 1000
 
-# Example output:
-# Benchmark: population=1000 threads=8
-#   Wall-clock: 0.48s  (~3600000 car-ticks total)
-```
-
-```bash
 # Compare single vs multi-thread
 ./build/racing_sim --benchmark --population 1000 --threads 1
 ./build/racing_sim --benchmark --population 1000 --threads 8
@@ -203,91 +239,9 @@ Measures simulation throughput and exits.
 
 ---
 
-## Controls (window mode)
+## Configuration File (train.json)
 
-| Key | Mode | Action |
-|---|---|---|
-| `W` / `↑` | default | Accelerate |
-| `S` / `↓` | default | Brake / reverse |
-| `A` / `←` | default | Steer left |
-| `D` / `→` | default | Steer right |
-| `T` | `--train` | Toggle real-time ↔ turbo |
-| Close window | all | Quit |
-
-Car 0 (yellow) displays **sensor rays**: green = long distance, red = close to edge.
-
----
-
-## Command-line Options
-
-```
-Config file
-  --config <file.json>  Load defaults from a JSON file (CLI flags override)
-  (auto-detect)         train.json in the current directory is loaded automatically
-
-Basic
-  --headless              Run without a window
-  --map <path>            Path to the map JSON (default: maps/map1_chicanes_infernais.json)
-  --population <N>        Number of simultaneous cars (default: 1)
-  --seed <S>              RNG seed — same seed → identical training run (default: 42)
-  --threads <K>           Threads for car updates (default: hardware_concurrency)
-  --benchmark             Measure throughput and exit
-
-Training
-  --train                 Enable the generational training loop
-  --algo <name>           Algorithm: genetic | random_search | hillclimb (default: genetic)
-  --generations <N>       Number of generations (default: 100)
-  --out <dir>             Output directory for weights (default: out/)
-  --load <file.rnnw>      With --train: seeds population from champion. Without --train: opens watch mode
-  --log-csv               Save per-generation metrics to <out>/log.csv
-  --hidden <N>            Hidden layer neurons (default: 32)
-  --episode-timeout <s>   Max episode duration in seconds (default: 30)
-
-Multi-map generalization
-  --train-maps <a,b,...>  Comma-separated list of training maps
-  --val-maps <x,y>        Validation maps (used for selection when --select-by-val)
-  --test-maps <x,y>       Test maps: report only (test_log.csv), never used for selection
-  --fitness-agg <mode>    Aggregate fitness across maps: cvar-rank (default) | min | mean | cvar-raw
-  --cvar-alpha <α>        CVaR tail fraction ∈ (0,1] (default: 0.5). Used with cvar-rank/cvar-raw
-  --map-norm <mode>       Per-map normalization: zscore (default) | minmax | progress
-                          Ignored under cvar-rank (ranks are scale-invariant)
-  --map-weights <w,...>   Per-map weights for cvar-rank (one per train map; default: all 1.0)
-  --progressive-frac <f>  Fraction of population evaluated on maps beyond the first (default: 1.0)
-  --finetune-map <path>   Replace map[0] with this JSON — useful to specialize on a new track
-
-Curriculum (off by default)
-  --curriculum <mode>     none (default) | linear | explicit
-  --curriculum-start <N>  Generation when the second map is introduced (linear, default: 2)
-  --curriculum-step <N>   Generations between each subsequent map addition (linear, default: 15)
-  --curriculum-schedule <g,...>  Generation thresholds for explicit mode (M−1 values)
-  --curriculum-pin <i,...>       Map indices always active regardless of curriculum
-
-Generalization (anti-overfitting — all off by default)
-  --augment <list>        Extra train maps: mirror,reverse,width:0.85,width:1.15
-  --procedural-train <K>  Generate K seeded random tracks into the train set
-  --procedural-val <K>    Generate K seeded random tracks into the validation set
-  --proc-width-min <w>    Min width for procedural tracks (default 55)
-  --proc-width-max <w>    Max width for procedural tracks (default 110)
-  --dump-gen-maps <dir>   Save augmented+procedural maps as JSON to <dir> before training
-  --random-spawn          Random start point per training episode (progress measured from spawn)
-  --sensor-noise <s>      Gaussian noise (stddev) on ray readings during training
-  --episodes-per-eval <N> Episodes per (genome,map), aggregated (default 1)
-  --episode-agg <mode>    Combine episodes: mean (default) | min
-  --select-by-val         Save best.rnnw by validation progress (top-K) instead of train fitness
-  --val-select-topk <T>   Train genomes evaluated on validation for selection (default 1)
-
-Watch / Interactive
-  --watch <file.rnnw>     Opens window with the saved network driving (no training)
-  --versus <file.rnnw>    Human (yellow, WASD/arrows) vs AI (green) with saved network
-
-  --help / -h             Display help
-```
-
-**Mode precedence:** `--benchmark` > `--watch` > `--versus` > `--train` > `--load` (without train = watch) > default window mode.
-
-### Config file (`train.json`)
-
-Instead of passing all flags on the command line, put your defaults in `train.json` at the project root. The simulator loads it automatically; CLI flags override any value from the file.
+Instead of passing all flags on the command line, put your defaults in `train.json` at the project root. The simulator auto-detects and loads it; CLI flags override any value from the file.
 
 ```json
 {
@@ -334,6 +288,90 @@ With this file, a full training run becomes:
 ```
 
 JSON keys use underscores and mirror the CLI flags: `train_maps`, `cvar_alpha`, `random_spawn`, `episodes_per_eval`, etc. Arrays are accepted for `train_maps`, `val_maps`, `test_maps`, `augment`, and `map_weights`.
+
+---
+
+## Controls (window mode)
+
+| Key | Mode | Action |
+|---|---|---|
+| `W` / `↑` | default | Accelerate |
+| `S` / `↓` | default | Brake / reverse |
+| `A` / `←` | default | Steer left |
+| `D` / `→` | default | Steer right |
+| `T` | `--train` | Toggle real-time ↔ turbo |
+| Close window | all | Quit |
+
+Car 0 (yellow) displays **sensor rays**: green = long distance, red = close to edge.
+
+---
+
+## Command-line Options
+
+```
+Config file
+  --config <file.json>  Load defaults from a JSON file (CLI flags override)
+  (auto-detect)         train.json in the current directory is loaded automatically
+
+Basic
+  --headless              Run without a window
+  --map <path>            Path to the map JSON (default: maps/map1_chicanes_infernais.json)
+  --population <N>        Number of simultaneous cars (default: 1)
+  --seed <S>              RNG seed — same seed → identical training run (default: 42)
+  --threads <K>           Threads for car updates (default: hardware_concurrency)
+  --benchmark             Measure throughput and exit
+
+Training
+  --train                 Enable the generational training loop
+  --algo <name>           Algorithm: genetic | random_search | hillclimb (default: genetic)
+  --generations <N>       Number of generations (default: 100)
+  --out <dir>             Output directory for weights (default: out/)
+  --load <file.rnnw>      With --train: seeds population from champion. Without --train: opens watch mode
+  --log-csv               Save training_log.csv, held_out_log.csv (and test_log.csv if --test-maps) to <out>
+  --hidden <N>            Hidden layer neurons (default: 32)
+  --episode-timeout <s>   Max episode duration in seconds (default: 30)
+
+Multi-map generalization
+  --train-maps <a,b,...>  Comma-separated list of training maps
+  --val-maps <x,y>        Validation maps (used for selection when --select-by-val)
+  --test-maps <x,y>       Test maps: report only (test_log.csv), never used for selection
+  --fitness-agg <mode>    Aggregate fitness across maps: cvar-rank (default) | min | mean | cvar-raw
+  --cvar-alpha <α>        CVaR tail fraction ∈ (0,1] (default: 0.5). Used with cvar-rank/cvar-raw
+  --map-norm <mode>       Per-map normalization: zscore (default) | minmax | progress
+                          Ignored under cvar-rank (ranks are scale-invariant)
+  --map-weights <w,...>   Per-map weights for cvar-rank (one per train map; default: all 1.0)
+  --progressive-frac <f>  Fraction of population evaluated on maps beyond the first (default: 1.0)
+  --finetune-map <path>   Replace map[0] with this JSON — useful to specialize on a new track
+
+Curriculum (off by default)
+  --curriculum <mode>     linear (default) | none | explicit
+  --curriculum-start <N>  Generation when the second map is introduced (linear, default: 2)
+  --curriculum-step <N>   Generations between each subsequent map addition (linear, default: 15)
+  --curriculum-schedule <g,...>  Generation thresholds for explicit mode (M−1 values)
+  --curriculum-pin <i,...>       Map indices always active regardless of curriculum
+
+Generalization (anti-overfitting — all off by default)
+  --augment <list>        Extra train maps: mirror,reverse,width:0.85,width:1.15
+  --procedural-train <K>  Generate K seeded random tracks into the train set
+  --procedural-val <K>    Generate K seeded random tracks into the validation set
+  --proc-width-min <w>    Min width for procedural tracks (default 55)
+  --proc-width-max <w>    Max width for procedural tracks (default 110)
+  --dump-gen-maps <dir>   Save augmented+procedural maps as JSON to <dir> before training
+  --random-spawn          Random start point per training episode (progress measured from spawn)
+  --sensor-noise <s>      Gaussian noise (stddev) on ray readings during training
+  --episodes-per-eval <N> Episodes per (genome,map), aggregated (default 1)
+  --episode-agg <mode>    Combine episodes: mean (default) | min
+  --select-by-val         Save best.rnnw by validation progress (top-K) instead of train fitness
+  --val-select-topk <T>   Train genomes evaluated on validation for selection (default 1)
+
+Watch / Interactive
+  --watch <file.rnnw>     Opens window with the saved network driving (no training)
+  --versus <file.rnnw>    Human (yellow, WASD/arrows) vs AI (green) with saved network
+
+  --help / -h             Display help
+```
+
+**Mode precedence:** `--benchmark` > `--watch` > `--versus` > `--train` > `--load` (without train = watch) > default window mode.
 
 ---
 
