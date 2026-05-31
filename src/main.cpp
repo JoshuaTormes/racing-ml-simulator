@@ -73,6 +73,7 @@ static void printUsage(const char* argv0) {
         << "  --procedural-val <K>  Generate K random tracks (seeded) into the validation set\n"
         << "  --proc-width-min <w>  Min sampled width for procedural tracks (default 55)\n"
         << "  --proc-width-max <w>  Max sampled width for procedural tracks (default 110)\n"
+        << "  --dump-gen-maps <dir> Save augmented+procedural train maps as JSON to <dir> before training\n"
         << "  --fitness-agg <mode>  Aggregation: cvar-rank (default) | min | mean | cvar-raw\n"
         << "  --cvar-alpha <α>      CVaR tail fraction in (0,1] (default: 0.5). Used with cvar-rank/cvar-raw\n"
         << "  --map-norm <mode>     Per-map normalisation: zscore (default) | minmax | progress\n"
@@ -168,6 +169,7 @@ int main(int argc, char* argv[]) {
     float       sensorNoise       = 0.f;
     std::string episodeAggArg     = "mean";
     std::string augmentArg;
+    std::string dumpGenMapsDir;
     int         proceduralTrain   = 0;
     int         proceduralVal     = 0;
     float       procWidthMin      = -1.f;  // -1 = use generator default
@@ -198,7 +200,8 @@ int main(int argc, char* argv[]) {
             else if (arg == "--sensor-noise"     && i+1 < argc) sensorNoise   = std::stof(argv[++i]);
             else if (arg == "--episodes-per-eval" && i+1 < argc) episodesPerEval = std::stoi(argv[++i]);
             else if (arg == "--episode-agg"      && i+1 < argc) episodeAggArg  = argv[++i];
-            else if (arg == "--augment"          && i+1 < argc) augmentArg     = argv[++i];
+            else if (arg == "--augment"          && i+1 < argc) augmentArg      = argv[++i];
+            else if (arg == "--dump-gen-maps"    && i+1 < argc) dumpGenMapsDir  = argv[++i];
             else if (arg == "--procedural-train" && i+1 < argc) proceduralTrain = std::stoi(argv[++i]);
             else if (arg == "--procedural-val"   && i+1 < argc) proceduralVal   = std::stoi(argv[++i]);
             else if (arg == "--proc-width-min"   && i+1 < argc) procWidthMin    = std::stof(argv[++i]);
@@ -514,6 +517,12 @@ int main(int argc, char* argv[]) {
         if (sensorNoise < 0.f) {
             std::cerr << "--sensor-noise must be >= 0, got " << sensorNoise << "\n";
             return 1;
+        }
+
+        // --dump-gen-maps: create dir and pass to mmCfg
+        if (!dumpGenMapsDir.empty()) {
+            std::filesystem::create_directories(dumpGenMapsDir);
+            mmCfg.dumpGenMaps = dumpGenMapsDir;
         }
 
         // --procedural-train/val + optional width overrides

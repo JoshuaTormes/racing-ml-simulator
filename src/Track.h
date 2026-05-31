@@ -44,6 +44,8 @@ public:
     // Parse a map JSON into a TrackData without building geometry. Reused by the
     // JSON ctor and by augmentation/procedural code that transforms the data.
     static TrackData loadData(const std::string& jsonPath);
+    // Serialize a TrackData back to JSON file (same format as loadData).
+    static void saveData(const TrackData& d, const std::string& jsonPath);
 
     // Geometry queries (SFML-free)
     bool  isInsideTrack(Vec2 p) const;

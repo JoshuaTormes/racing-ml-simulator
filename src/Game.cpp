@@ -49,6 +49,12 @@ void Game::loadMap(const std::string& path) {
     spawnCars();
 }
 
+void Game::loadMap(const Track& t) {
+    track_ = std::make_unique<Track>(t);
+    cfg_.map = t.name();
+    spawnCars();
+}
+
 void Game::updateRange(int begin, int end) {
     for (int i = begin; i < end; ++i) {
         Car& car = cars_[i];

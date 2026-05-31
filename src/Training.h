@@ -49,6 +49,10 @@ struct MultiMapConfig {
     // "width:<factor>". Each produces an extra training map. Empty = no augmentation.
     std::vector<std::string> augment;
 
+    // If non-empty, all generated/augmented train tracks are written as JSON files to
+    // this directory before training starts (useful for visualization/debugging).
+    std::string dumpGenMaps;
+
     // Procedural tracks generated (seeded from cfg.seed) and appended to the train/val
     // sets. 0 = none. genParams controls the generator (waypoint count, radius, width).
     int                 proceduralTrain = 0;

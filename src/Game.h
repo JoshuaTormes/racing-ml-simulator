@@ -47,6 +47,7 @@ public:
 
     // Replace the active track and respawn all cars (SFML-free)
     void loadMap(const std::string& path);
+    void loadMap(const Track& t);  // in-memory variant (no file I/O)
 
     const SimConfig& config() const { return cfg_; }
 

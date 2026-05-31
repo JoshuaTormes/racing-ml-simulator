@@ -59,6 +59,34 @@ TrackData Track::loadData(const std::string& jsonPath) {
     return d;
 }
 
+void Track::saveData(const TrackData& d, const std::string& jsonPath) {
+    json j;
+    j["name"]        = d.name;
+    j["closed"]      = d.closed;
+    j["track_width"] = d.trackWidth;
+    j["waypoints"]   = json::array();
+    for (const auto& wp : d.waypoints)
+        j["waypoints"].push_back({wp.x, wp.y});
+    if (!d.obstacles.empty()) {
+        j["obstacles"] = json::array();
+        for (const auto& ob : d.obstacles) {
+            json o;
+            o["pos"] = {ob.pos.x, ob.pos.y};
+            if (ob.type == Obstacle::Type::Circle) {
+                o["type"]   = "circle";
+                o["radius"] = ob.radius;
+            } else {
+                o["type"] = "rect";
+                o["size"] = {ob.size.x, ob.size.y};
+            }
+            j["obstacles"].push_back(o);
+        }
+    }
+    std::ofstream f(jsonPath);
+    if (!f) throw std::runtime_error("Track::saveData: cannot write " + jsonPath);
+    f << j.dump(2);
+}
+
 // JSON ctor delegates to the in-memory ctor after parsing.
 Track::Track(const std::string& jsonPath) : Track(loadData(jsonPath)) {}
 

@@ -71,6 +71,8 @@ TrainingSession::TrainingSession(SimConfig sim,
                 else if (tok == "reverse")             d = trackgen::reverse(base);
                 else if (tok.rfind("width:", 0) == 0)  d = trackgen::scaleWidth(base, std::stof(tok.substr(6)));
                 else throw std::runtime_error("Unknown --augment token: " + tok);
+                if (!mmCfg_.dumpGenMaps.empty())
+                    Track::saveData(d, mmCfg_.dumpGenMaps + "/" + d.name + ".json");
                 trainMaps_.push_back(d.name);
                 trainTracks_.push_back(std::make_unique<Track>(d));
             }
@@ -81,6 +83,8 @@ TrainingSession::TrainingSession(SimConfig sim,
     for (int i = 0; i < mmCfg_.proceduralTrain; ++i) {
         unsigned s = sim.seed * 2654435761u + 0x00C0FFEEu + (unsigned)i;
         TrackData d = trackgen::generateLoop(s, mmCfg_.genParams);
+        if (!mmCfg_.dumpGenMaps.empty())
+            Track::saveData(d, mmCfg_.dumpGenMaps + "/" + d.name + ".json");
         trainMaps_.push_back(d.name);
         trainTracks_.push_back(std::make_unique<Track>(d));
     }
@@ -130,7 +134,7 @@ void TrainingSession::setMap(const std::string& path) {
 // Multi-map helpers
 // ---------------------------------------------------------------------------
 void TrainingSession::loadTrainMap(size_t idx) {
-    game_.loadMap(trainMaps_[idx]);
+    game_.loadMap(*trainTracks_[idx]);
 }
 
 void TrainingSession::recordCurrentMapFitness() {
