@@ -94,7 +94,7 @@ gen    2/5000  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 m3= 0.412 m4= 0.056 m
 ...
 ```
 
-Colunas: `agg` = fitness agregado (min entre mapas), `m0..m5` = melhor fitness normalizado por mapa, `done` = carros que completaram o circuito.
+Colunas: `agg` = fitness agregado (modo configurável via `--fitness-agg`), `m0..mN` = melhor fitness normalizado por mapa, `done` = carros que completaram o circuito.
 
 ### Treinamento multi-mapa (generalização)
 
@@ -114,7 +114,7 @@ Treina em vários mapas simultaneamente para produzir um agente que generaliza, 
 ./build/racing_sim --train --headless --fitness-agg mean --generations 100
 ```
 
-O **fitness agregado** (coluna `agg=` no terminal) é por padrão o **mínimo** entre mapas — força o agente a não ignorar nenhuma pista. Com `--fitness-agg mean` usa a média, mais tolerante a mapas difíceis.
+O **fitness agregado** (coluna `agg=` no terminal) é por padrão **`cvar-rank`** — rank-CVaR entre mapas, que penaliza agentes inconsistentes sem ignorar mapas difíceis. Outras opções: `min` (força o pior mapa a subir), `mean` (mais tolerante) e `cvar-raw` (CVaR direto sobre valores de fitness).
 
 #### Combatendo overfitting (diversidade, anti-memorização e seleção por held-out)
 
@@ -227,9 +227,9 @@ O carro 0 (amarelo) exibe os **raios de sensor**: verde = distância longa, verm
 ```
 Básico
   --headless              Roda sem janela
-  --map <path>            Caminho do JSON do mapa (default: maps/map1.json)
+  --map <path>            Caminho do JSON do mapa (default: maps/map1_chicanes_infernais.json)
   --population <N>        Número de carros simultâneos (default: 1)
-  --seed <S>              Seed do RNG — garante reprodutibilidade (default: 42)
+  --seed <S>              Seed do RNG — mesma seed → mesmo treino (default: 42)
   --threads <K>           Threads para atualização dos carros (default: hardware_concurrency)
   --benchmark             Mede throughput e sai
 
@@ -239,13 +239,28 @@ Treinamento
   --generations <N>       Número de gerações (default: 100)
   --out <dir>             Diretório de saída dos pesos (default: out/)
   --load <arquivo.rnnw>   Com --train: semeia população do campeão. Sem --train: abre modo watch
+  --log-csv               Salva métricas por geração em <out>/log.csv
+  --hidden <N>            Neurônios na camada oculta (default: 32; exige recompilar se mudar Constants.h)
+  --episode-timeout <s>   Duração máxima de um episódio em segundos (default: 30)
 
 Generalização multi-mapa
   --train-maps <a,b,...>  Lista de mapas de treino separados por vírgula
   --val-maps <x,y>        Mapas de validação (seleção quando --select-by-val)
-  --test-maps <x,y>       Mapas de teste: só relatório, nunca usados na seleção
-  --fitness-agg <modo>    Como agregar fitness entre mapas: min (default) | mean
-  (sem --train-maps: usa todos os *.json em maps/, split 6 treino / 2 val automático)
+  --test-maps <x,y>       Mapas de teste: só relatório (gera test_log.csv), nunca usados na seleção
+  --fitness-agg <modo>    Agrega fitness entre mapas: cvar-rank (default) | min | mean | cvar-raw
+  --cvar-alpha <α>        Fração de cauda CVaR ∈ (0,1] (default: 0.5). Usado com cvar-rank/cvar-raw
+  --map-norm <modo>       Normalização por mapa antes do CVaR: zscore (default) | minmax | progress
+                          Ignorado em cvar-rank (ranks são invariantes à escala)
+  --map-weights <w,...>   Pesos por mapa para cvar-rank (vírgula, um por mapa de treino; default: todos 1.0)
+  --progressive-frac <f>  Fração da população avaliada em mapas além do primeiro (default: 1.0)
+  --finetune-map <path>   Substitui map[0] por este JSON — útil para refinar em nova pista sem retreinar tudo
+
+Curriculum (desligado por padrão)
+  --curriculum <modo>     none (default) | linear | explicit
+  --curriculum-start <N>  Geração em que o segundo mapa entra (linear, default: 2)
+  --curriculum-step <N>   Gerações entre adição de cada mapa subsequente (linear, default: 15)
+  --curriculum-schedule <g,...>  Thresholds de geração para modo explicit (M−1 valores)
+  --curriculum-pin <i,...>       Índices de mapas sempre ativos (independente do curriculum)
 
 Generalização (combate a overfitting — todas desligadas por padrão)
   --augment <lista>       Variantes de treino: mirror,reverse,width:0.85,width:1.15
@@ -253,6 +268,7 @@ Generalização (combate a overfitting — todas desligadas por padrão)
   --procedural-val <K>    Gera K pistas aleatórias (semeadas) no conjunto de validação
   --proc-width-min <w>    Largura mínima das pistas procedurais (default 55)
   --proc-width-max <w>    Largura máxima das pistas procedurais (default 110)
+  --dump-gen-maps <dir>   Salva pistas augmentadas+procedurais como JSON em <dir> antes de treinar
   --random-spawn          Início aleatório na pista a cada episódio de treino
   --sensor-noise <s>      Ruído gaussiano (desvio) nas leituras de raio no treino
   --episodes-per-eval <N> Episódios por (genoma,mapa), agregados (default 1)
@@ -541,40 +557,46 @@ Todas em `src/core/Constants.h`. Mudar qualquer uma exige recompilar.
 | `MAX_REVERSE_SPEED` | 0 px/s | Velocidade máxima de ré (0 = ré desativada) |
 | `ACCEL` | 300 px/s² | Aceleração com throttle positivo |
 | `BRAKE` | 500 px/s² | Desaceleração com throttle negativo |
-| `DRAG` | 0.98 | Fator de atrito por tick (multiplica a velocidade) |
+| `DRAG` | 0.98 | Fator de atrito por tick (0.98^60 ≈ 0.30 em 1s) |
 | `MAX_STEER` | 3.0 rad/s | Taxa máxima de giro |
-| `MAX_LAT_ACCEL` | 650 px/s² | Limite de grip (yawRate ≤ MAX_LAT_ACCEL/v) |
-| `EPISODE_TIMEOUT` | 60 s | Duração máxima de um episódio |
-| `STALL_TIMEOUT` | 2 s | Tempo sem progresso (ou parado) antes de `done` |
-| `STALL_SPEED` | 4 px/s | Threshold de velocidade mínima para o stall timer |
-| `STALL_PROGRESS_MIN` | 0.05 | Avanço mínimo de waypoint para resetar o timer de stall |
-| `OBS_SIZE` | 27 | Tamanho fixo do vetor de observação (= `NUM_RAYS + 14`) |
-| `NN_HIDDEN` | 32 | Neurônios na camada oculta da rede padrão |
+| `MAX_LAT_ACCEL` | 650 px/s² | Limite de grip lateral (yawRate ≤ MAX_LAT_ACCEL/v) |
+| `EPISODE_TIMEOUT` | 30 s | Duração máxima de um episódio (configurável via `--episode-timeout`) |
+| `STALL_TIMEOUT` | 2 s | Tempo sem progresso mínimo antes de `done` |
+| `STALL_SPEED` | 4 px/s | Velocidade abaixo da qual o timer de stall corre |
+| `STALL_PROGRESS_MIN` | 0.003 | Avanço mínimo de arco (fração do lap) para resetar o stall timer |
+| `NUM_LOOKAHEADS` | 5 | Quantos pontos de lookahead de curvatura o carro enxerga |
+| `OBS_SIZE` | 26 | Tamanho do vetor de observação (= `NUM_RAYS + 3 + 2 × NUM_LOOKAHEADS`) |
+| `NN_HIDDEN` | 32 | Neurônios na camada oculta (sobrescrito por `--hidden`) |
 
-**Vetor de observação (27 floats):**
+**Vetor de observação (26 floats):**
 
 | Índices | Conteúdo |
 |---|---|
-| `[0..12]` | 13 leituras de raycast normalizadas [0,1] |
-| `[13]` | Velocidade normalizada [0,1] |
-| `[14]` | Ângulo para o próximo waypoint ∈ [-1,1] |
-| `[15]` | Distância para o próximo waypoint ∈ [0,1] |
-| `[16]` | Ângulo para o waypoint seguinte (lookahead 2) ∈ [-1,1] |
-| `[17..26]` | 5 × (curvatura assinada, speed_excess) para lookaheads 1–5 |
+| `[0..12]` | 13 leituras de raycast normalizadas [0,1] — leque de 180° à frente |
+| `[13]` | Velocidade normalizada `\|v\| / MAX_SPEED` ∈ [0,1] |
+| `[14]` | Offset lateral em relação à linha central ∈ [-1,1] (positivo = à direita) |
+| `[15]` | Heading error (ângulo do carro vs tangente da pista) ∈ [-1,1] |
+| `[16,17]` | Lookahead 1 — (curvatura assinada ∈ [-1,1], speed_excess ∈ [-1,1]) |
+| `[18,19]` | Lookahead 2 |
+| `[20,21]` | Lookahead 3 |
+| `[22,23]` | Lookahead 4 |
+| `[24,25]` | Lookahead 5 (mais distante) |
+
+`speed_excess` = quão rápido o carro vai em relação à velocidade segura para aquela curva (positivo = rápido demais).
 
 Pesos do reward em `src/core/Types.h` (`RewardConfig`):
 
 | Campo | Padrão | Significado |
 |---|---|---|
-| `w_progress` | 1.0 | Multiplicador do progresso máximo acumulado |
-| `w_speed` | 0.1 | Bônus de velocidade em trechos retos |
-| `w_checkpoint` | 0.5 | Bônus por passar waypoints curvos |
-| `w_finish` | 200.0 | Bônus por completar o circuito |
-| `w_time` | 1.0 | Bônus de tempo restante ao completar |
-| `w_crash` | 50.0 | Penalidade por colisão |
-| `w_reverse` | 0.5 | Penalidade por andar de ré |
-| `w_regress` | 2.0 | Penalidade por regredir no percurso |
-| `w_curve` | 0.0 | Penalidade por alta velocidade em curvas (desativado) |
+| `w_progress` | 200.0 | Multiplicador do progresso máximo de arco ∈ [0,1] |
+| `w_speed` | 0.3 | Bônus por velocidade enquanto avança (incentiva não parar) |
+| `w_checkpoint` | 5.0 | Bônus por waypoint de design cruzado, escalado pela curvatura local |
+| `w_finish` | 100.0 | Bônus por completar o circuito |
+| `w_time` | 2.0 | Bônus de tempo restante ao completar (`w_time × (timeout − t)`) |
+| `w_crash` | 15.0 | Penalidade por colisão |
+| `w_reverse` | 0.5 | Penalidade acumulada por andar de ré (por unidade de velocidade negativa/s) |
+| `w_regress` | 2.0 | Penalidade por regredir no percurso (maxProgress − currentProgress)/s |
+| `w_curve` | 0.0 | Penalidade por alta velocidade em curvas (desativado por padrão) |
 
 ---
 
@@ -584,29 +606,39 @@ Pesos do reward em `src/core/Types.h` (`RewardConfig`):
 racing-ml-sim/
 ├── CMakeLists.txt          # Build: SFML 3 + nlohmann/json (FetchContent)
 ├── README.md               # Este arquivo
+├── README-en.md            # Versão em inglês
 ├── ARCHITECTURE.md         # Documentação técnica detalhada
 ├── assets/
 │   └── DejaVuSans.ttf      # Fonte open-source para o HUD
 ├── maps/
-│   └── map1.json           # Circuito de exemplo (8 waypoints, 2 obstáculos)
+│   ├── map1_chicanes_infernais.json  # Pista com sequência de chicanes
+│   ├── map4_obstaculos.json          # Pista com obstáculos estáticos
+│   ├── map5_tecnico_avancado.json    # Pista técnica avançada
+│   ├── map7_pesadelo.json            # Mapa de validação
+│   └── map8_caos_total.json          # Mapa de teste (held-out)
 ├── src/
 │   ├── core/
 │   │   ├── Vec2.h          # Vetor 2D matemático, header-only, sem SFML
 │   │   ├── Constants.h     # Todas as constantes da simulação
-│   │   └── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
+│   │   ├── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
+│   │   └── TrackGen.h/.cpp # Geração procedural de pistas e augmentation (mirrorX, reverse, scaleWidth)
 │   ├── AIController.h      # Interface abstrata: decide(Observation) → Action
-│   ├── Track.h / .cpp      # Pista: JSON, bordas, raycast, progresso
+│   ├── Track.h / .cpp      # Pista: JSON/in-memory, bordas Catmull-Rom, raycast, progresso por arco
 │   ├── Sensor.h / .cpp     # 13 raios normalizados em leque de 180°
-│   ├── Car.h / .cpp        # Física, observação, reward, condições de done
+│   ├── Car.h / .cpp        # Física, observação (26 floats), reward, condições de done
 │   ├── NeuralNetwork.h/.cpp# MLP feedforward + serialização binária RNNW + NNController
 │   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutação
 │   ├── Trainer.h           # Interface Trainer + struct GenerationStats (sem SFML)
 │   ├── Trainers.h / .cpp   # GeneticTrainer, RandomSearchTrainer, HillClimbTrainer + makeTrainer()
-│   ├── Training.h / .cpp   # TrainingSession: loop geracional, stats, save/load (sem SFML)
+│   ├── Training.h / .cpp   # TrainingSession: loop multi-mapa, curriculum, augmentation, val/test
+│   ├── TrainingMath.h/.cpp # CVaR, rank-CVaR, z-score e agregações de fitness
 │   ├── Game.h / .cpp       # reset/step (RL), tick batch, thread pool
 │   ├── Renderer.h / .cpp   # ÚNICA camada SFML: pista, carros, HUD, gráfico fitness
 │   ├── HumanController.h/.cpp  # Leitura de teclado → Action (depende de SFML)
 │   └── main.cpp            # Parse de args, dispatch para todos os modos
+├── tools/
+│   ├── check_map_overlap.py  # Detecta auto-sobreposição do ribbon da pista; salva PNG opcional
+│   └── watch_training.py     # Plota curvas de fitness/validação ao vivo durante o treino
 └── tests/
-    └── test_main.cpp       # 286 testes: Vec2, geometria, NN, determinismo, GA, Trainers, TrainingSession, reward
+    └── test_main.cpp       # Testes: Vec2, geometria, NN, determinismo, GA, Trainers, TrainingSession, reward
 ```

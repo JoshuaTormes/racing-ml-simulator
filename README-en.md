@@ -93,7 +93,7 @@ gen    2/5000  agg=  0.412 | m0= 0.891 m1= 0.694 m2= 0.138 m3= 0.412 m4= 0.056 m
 ...
 ```
 
-Columns: `agg` = aggregated fitness (min across maps), `m0..m5` = best normalised fitness per map, `done` = cars that completed the circuit.
+Columns: `agg` = aggregated fitness (mode configurable via `--fitness-agg`), `m0..mN` = best normalised fitness per map, `done` = cars that completed the circuit.
 
 Files generated in `out/` (or `--out <dir>`):
 
@@ -168,35 +168,65 @@ Car 0 (yellow) displays **sensor rays**: green = long distance, red = close to e
 ## Command-line Options
 
 ```
---headless              Run without a window
---map <path>            Path to the map JSON (default: maps/map1.json)
---population <N>        Number of simultaneous cars (default: 1)
---seed <S>              RNG seed — ensures reproducibility (default: 42)
---threads <K>           Threads for car updates (default: hardware_concurrency)
---benchmark             Measure throughput and exit
+Basic
+  --headless              Run without a window
+  --map <path>            Path to the map JSON (default: maps/map1_chicanes_infernais.json)
+  --population <N>        Number of simultaneous cars (default: 1)
+  --seed <S>              RNG seed — same seed → identical training run (default: 42)
+  --threads <K>           Threads for car updates (default: hardware_concurrency)
+  --benchmark             Measure throughput and exit
 
---train                 Enable the generational training loop
---algo <name>           Algorithm: genetic | random_search | hillclimb (default: genetic)
---generations <N>       Number of generations (default: 100)
---out <dir>             Output directory for weights (default: out/)
---load <file.rnnw>      With --train: seeds population from champion. Without --train: opens watch mode
---watch <file.rnnw>     Opens window with the saved network driving (no training)
+Training
+  --train                 Enable the generational training loop
+  --algo <name>           Algorithm: genetic | random_search | hillclimb (default: genetic)
+  --generations <N>       Number of generations (default: 100)
+  --out <dir>             Output directory for weights (default: out/)
+  --load <file.rnnw>      With --train: seeds population from champion. Without --train: opens watch mode
+  --log-csv               Save per-generation metrics to <out>/log.csv
+  --hidden <N>            Hidden layer neurons (default: 32)
+  --episode-timeout <s>   Max episode duration in seconds (default: 30)
+
+Multi-map generalization
+  --train-maps <a,b,...>  Comma-separated list of training maps
+  --val-maps <x,y>        Validation maps (used for selection when --select-by-val)
+  --test-maps <x,y>       Test maps: report only (test_log.csv), never used for selection
+  --fitness-agg <mode>    Aggregate fitness across maps: cvar-rank (default) | min | mean | cvar-raw
+  --cvar-alpha <α>        CVaR tail fraction ∈ (0,1] (default: 0.5). Used with cvar-rank/cvar-raw
+  --map-norm <mode>       Per-map normalization: zscore (default) | minmax | progress
+                          Ignored under cvar-rank (ranks are scale-invariant)
+  --map-weights <w,...>   Per-map weights for cvar-rank (one per train map; default: all 1.0)
+  --progressive-frac <f>  Fraction of population evaluated on maps beyond the first (default: 1.0)
+  --finetune-map <path>   Replace map[0] with this JSON — useful to specialize on a new track
+
+Curriculum (off by default)
+  --curriculum <mode>     none (default) | linear | explicit
+  --curriculum-start <N>  Generation when the second map is introduced (linear, default: 2)
+  --curriculum-step <N>   Generations between each subsequent map addition (linear, default: 15)
+  --curriculum-schedule <g,...>  Generation thresholds for explicit mode (M−1 values)
+  --curriculum-pin <i,...>       Map indices always active regardless of curriculum
 
 Generalization (anti-overfitting — all off by default)
---train-maps / --val-maps / --test-maps   Train / validation / report-only map lists
---augment <list>        Extra train maps: mirror,reverse,width:0.85,width:1.15
---procedural-train <K>  Generate K seeded random tracks into the train set (--procedural-val too)
---proc-width-min/max <w> Width band for procedural tracks (default 55..110)
---random-spawn          Random start point per training episode (progress measured from spawn)
---sensor-noise <s>      Gaussian noise (stddev) on ray readings during training
---episodes-per-eval <N> Episodes per (genome,map), aggregated (--episode-agg mean|min)
---select-by-val         Save best.rnnw by validation progress (top-K) instead of train fitness
---val-select-topk <T>   Train genomes evaluated on validation for selection (default 1)
+  --augment <list>        Extra train maps: mirror,reverse,width:0.85,width:1.15
+  --procedural-train <K>  Generate K seeded random tracks into the train set
+  --procedural-val <K>    Generate K seeded random tracks into the validation set
+  --proc-width-min <w>    Min width for procedural tracks (default 55)
+  --proc-width-max <w>    Max width for procedural tracks (default 110)
+  --dump-gen-maps <dir>   Save augmented+procedural maps as JSON to <dir> before training
+  --random-spawn          Random start point per training episode (progress measured from spawn)
+  --sensor-noise <s>      Gaussian noise (stddev) on ray readings during training
+  --episodes-per-eval <N> Episodes per (genome,map), aggregated (default 1)
+  --episode-agg <mode>    Combine episodes: mean (default) | min
+  --select-by-val         Save best.rnnw by validation progress (top-K) instead of train fitness
+  --val-select-topk <T>   Train genomes evaluated on validation for selection (default 1)
 
---help / -h             Display help
+Watch / Interactive
+  --watch <file.rnnw>     Opens window with the saved network driving (no training)
+  --versus <file.rnnw>    Human (yellow, WASD/arrows) vs AI (green) with saved network
+
+  --help / -h             Display help
 ```
 
-**Mode precedence:** `--benchmark` > `--watch` > `--train` > `--load` (without train = watch) > default window mode.
+**Mode precedence:** `--benchmark` > `--watch` > `--versus` > `--train` > `--load` (without train = watch) > default window mode.
 
 ---
 
@@ -304,10 +334,15 @@ Implement `AIController` and use the `reset()`/`step()` interface:
 class MyAgent : public AIController {
 public:
     Action decide(const Observation& obs) override {
-        // obs[0..6]  → 7 normalized raycast readings [0,1]
-        // obs[7]     → normalized speed [0,1]
-        // obs[8]     → angle to next waypoint ∈ [-1,1]
-        // obs[9]     → distance to next waypoint ∈ [0,1]
+        // obs[0..12] → 13 normalized raycast readings [0,1] (180° fan)
+        // obs[13]    → normalized speed |v|/MAX_SPEED ∈ [0,1]
+        // obs[14]    → lateral offset from centerline ∈ [-1,1] (positive = right)
+        // obs[15]    → heading error vs track tangent ∈ [-1,1]
+        // obs[16,17] → lookahead 1: (signed_curvature ∈ [-1,1], speed_excess ∈ [-1,1])
+        // obs[18,19] → lookahead 2
+        // obs[20,21] → lookahead 3
+        // obs[22,23] → lookahead 4
+        // obs[24,25] → lookahead 5 (furthest)
         //
         // Return Action{throttle, steering} both ∈ [-1, 1]
         return Action{1.f, 0.f}; // example: always accelerate straight
@@ -458,27 +493,36 @@ All located in `src/core/Constants.h`. Changing any of them requires recompiling
 |---|---|---|
 | `SIM_HZ` | 60 | Simulation frequency (steps/second) |
 | `DT` | 1/60 s | Fixed timestep per step |
-| `NUM_RAYS` | 7 | Number of sensor rays (changes `OBS_SIZE` automatically) |
-| `RAY_MAX_LEN` | 300 px | Maximum distance per ray; beyond that returns 1.0 |
+| `NUM_RAYS` | 13 | Number of sensor rays (changes `OBS_SIZE` automatically) |
+| `RAY_MAX_LEN` | 400 px | Maximum distance per ray; beyond that returns 1.0 |
 | `MAX_SPEED` | 400 px/s | Maximum car speed |
+| `MAX_REVERSE_SPEED` | 0 px/s | Maximum reverse speed (0 = reverse disabled) |
 | `ACCEL` | 300 px/s² | Acceleration with positive throttle |
-| `BRAKE` | 500 px/s² | Deceleration/reverse with negative throttle |
-| `DRAG` | 0.98 | Friction factor per tick (multiplies speed) |
-| `MAX_STEER` | 3.0 rad/s | Maximum turn rate at maximum speed |
-| `EPISODE_TIMEOUT` | 60 s | Maximum duration of an episode |
-| `STALL_TIMEOUT` | 5 s | Maximum time without progress before `done` |
-| `OBS_SIZE` | 10 | Fixed observation vector size (= `NUM_RAYS + 3`) |
+| `BRAKE` | 500 px/s² | Deceleration with negative throttle |
+| `DRAG` | 0.98 | Friction factor per tick (0.98^60 ≈ 0.30 in 1s) |
+| `MAX_STEER` | 3.0 rad/s | Maximum turn rate |
+| `MAX_LAT_ACCEL` | 650 px/s² | Lateral grip limit (yawRate ≤ MAX_LAT_ACCEL/v) |
+| `EPISODE_TIMEOUT` | 30 s | Maximum episode duration (overridable via `--episode-timeout`) |
+| `STALL_TIMEOUT` | 2 s | Time without minimum arc progress before `done` |
+| `STALL_SPEED` | 4 px/s | Speed below which the stall timer runs |
+| `STALL_PROGRESS_MIN` | 0.003 | Min arc progress fraction to reset the stall timer |
+| `NUM_LOOKAHEADS` | 5 | Number of curvature lookahead points in the observation |
+| `OBS_SIZE` | 26 | Observation vector size (= `NUM_RAYS + 3 + 2 × NUM_LOOKAHEADS`) |
+| `NN_HIDDEN` | 32 | Hidden layer neurons (overridable via `--hidden`) |
 
 Reward weights in `src/core/Types.h` (`RewardConfig`):
 
 | Field | Default | Meaning |
 |---|---|---|
-| `w_progress` | 1.0 | Progress multiplier per tick |
-| `w_speed` | 0.1 | Bonus for moving fast |
-| `w_idle` | 0.05 | Penalty for staying still |
+| `w_progress` | 200.0 | Weight on max arc progress ∈ [0,1] |
+| `w_speed` | 0.3 | Bonus per unit of speed while advancing |
+| `w_checkpoint` | 5.0 | One-shot bonus per design waypoint crossed, scaled by curvature |
 | `w_finish` | 100.0 | Bonus for completing the circuit |
-| `w_crash` | 50.0 | Penalty for collision |
-| `idle_eps` | 5 px/s | Speed threshold for idle penalty |
+| `w_time` | 2.0 | Time-remaining bonus on completion (`w_time × (timeout − t)`) |
+| `w_crash` | 15.0 | Penalty for collision |
+| `w_reverse` | 0.5 | Accumulated penalty for reverse speed (per unit/s) |
+| `w_regress` | 2.0 | Penalty for regressing behind peak progress (per unit/s) |
+| `w_curve` | 0.0 | Penalty for high speed in tight corners (disabled by default) |
 
 ---
 
@@ -493,25 +537,34 @@ racing-ml-sim/
 ├── assets/
 │   └── DejaVuSans.ttf      # Open-source font for the HUD
 ├── maps/
-│   └── map1.json           # Example circuit (8 waypoints, 2 obstacles)
+│   ├── map1_chicanes_infernais.json  # Track with chicane sequence
+│   ├── map4_obstaculos.json          # Track with static obstacles
+│   ├── map5_tecnico_avancado.json    # Advanced technical track
+│   ├── map7_pesadelo.json            # Validation map
+│   └── map8_caos_total.json          # Test map (held-out)
 ├── src/
 │   ├── core/
 │   │   ├── Vec2.h          # 2D math vector, header-only, no SFML
 │   │   ├── Constants.h     # All simulation constants
-│   │   └── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
+│   │   ├── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
+│   │   └── TrackGen.h/.cpp # Procedural track generation and augmentation (mirrorX, reverse, scaleWidth)
 │   ├── AIController.h      # Abstract interface: decide(Observation) → Action
-│   ├── Track.h / .cpp      # Track: JSON, edges, raycast, progress
-│   ├── Sensor.h / .cpp     # 7 normalized rays in a 180° fan
-│   ├── Car.h / .cpp        # Physics, observation, reward, done conditions
+│   ├── Track.h / .cpp      # Track: JSON/in-memory, Catmull-Rom edges, raycast, arc-length progress
+│   ├── Sensor.h / .cpp     # 13 normalized rays in a 180° fan
+│   ├── Car.h / .cpp        # Physics, observation (26 floats), reward, done conditions
 │   ├── NeuralNetwork.h/.cpp# Feedforward MLP + binary RNNW serialization + NNController
 │   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutation
 │   ├── Trainer.h           # Trainer interface + GenerationStats struct (no SFML)
 │   ├── Trainers.h / .cpp   # GeneticTrainer, RandomSearchTrainer, HillClimbTrainer + makeTrainer()
-│   ├── Training.h / .cpp   # TrainingSession: generational loop, stats, save/load (no SFML)
+│   ├── Training.h / .cpp   # TrainingSession: multi-map loop, curriculum, augmentation, val/test
+│   ├── TrainingMath.h/.cpp # CVaR, rank-CVaR, z-score and fitness aggregations
 │   ├── Game.h / .cpp       # reset/step (RL), batch tick, thread pool
 │   ├── Renderer.h / .cpp   # ONLY SFML layer: track, cars, HUD, fitness chart
 │   ├── HumanController.h/.cpp  # Keyboard input → Action (depends on SFML)
 │   └── main.cpp            # Arg parsing, dispatch for all modes
+├── tools/
+│   ├── check_map_overlap.py  # Detect track ribbon self-overlap; optional PNG output
+│   └── watch_training.py     # Live-plot fitness/validation curves during training
 └── tests/
-    └── test_main.cpp       # 136 tests: Vec2, geometry, NN, determinism, GA, Trainers, TrainingSession
+    └── test_main.cpp       # Tests: Vec2, geometry, NN, determinism, GA, Trainers, TrainingSession, reward
 ```
