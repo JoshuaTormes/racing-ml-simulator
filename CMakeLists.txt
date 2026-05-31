@@ -29,6 +29,7 @@ target_include_directories(nlohmann_json INTERFACE ${nlohmann_json_SOURCE_DIR}/i
 set(SIM_SOURCES
   src/main.cpp
   src/Track.cpp
+  src/core/TrackGen.cpp
   src/Car.cpp
   src/Sensor.cpp
   src/NeuralNetwork.cpp
@@ -48,6 +49,7 @@ target_link_libraries(racing_sim PRIVATE SFML::Graphics SFML::Window SFML::Syste
 enable_testing()
 add_executable(racing_tests tests/test_main.cpp
   src/Track.cpp
+  src/core/TrackGen.cpp
   src/Car.cpp
   src/Sensor.cpp
   src/NeuralNetwork.cpp

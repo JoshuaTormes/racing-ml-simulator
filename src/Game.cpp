@@ -4,6 +4,7 @@
 #include <iostream>
 #include <algorithm>
 #include <random>
+#include <cmath>
 
 Game::Game(SimConfig cfg)
     : cfg_(std::move(cfg))
@@ -130,15 +131,42 @@ double Game::runHeadlessEpisode() {
 // ---------------------------------------------------------------------------
 Game::EpisodeResult Game::simulateEpisode(const Track& track,
                                           AIController& ctrl,
-                                          const RewardConfig& reward) {
+                                          const RewardConfig& reward,
+                                          const EpisodeConfig& ep) {
     Car car;
-    car.reset(track.spawnPos(), track.spawnAngle());
+    std::mt19937 rng(ep.seed);
+
+    if (ep.randomSpawn && track.totalArcLength() > 0.f) {
+        // Start at a random point along the centerline; progress is measured relative
+        // to this spawn (see Car::stepDone), so the car must drive a full lap from here.
+        float L = track.totalArcLength();
+        std::uniform_real_distribution<float> U(0.f, 1.f);
+        float arc0 = U(rng) * L;
+        Vec2  p    = track.centerlineAtArc(arc0);
+        Vec2  t    = track.tangentAtArc(arc0);
+        car.reset(p, std::atan2(t.y, t.x), arc0 / L);
+        // Skip checkpoints behind the spawn so they are not credited for free.
+        const auto& cp = track.checkpointArcLens();
+        int lc = 1;
+        while (lc < (int)cp.size() && cp[(size_t)lc] <= arc0) ++lc;
+        car.lastCheckpoint = lc;
+    } else {
+        car.reset(track.spawnPos(), track.spawnAngle());
+    }
     ctrl.reset(); // no-op for NN; preserves contract for future controllers
+
+    const bool addNoise = ep.sensorNoise > 0.f;
+    std::normal_distribution<float> noise(0.f, ep.sensorNoise);
+
     while (!car.done) {
         // Mirrors Game::updateRange order: observe → decide → applyAction → stepDone
         // (stepDone updates the sensor internally; on tick 0 sensor is all-zeros,
         //  matching the batch path which also starts with an un-initialised sensor)
         Observation obs = car.observe(track);
+        if (addNoise) {
+            for (int i = 0; i < NUM_RAYS; ++i)
+                obs[i] = std::clamp(obs[i] + noise(rng), 0.f, 1.f);
+        }
         Action      act = ctrl.decide(obs);
         car.applyAction(act);
         car.stepDone(track, reward);

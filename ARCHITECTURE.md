@@ -675,6 +675,40 @@ Regras:
 
 ---
 
+## Generalização: diversidade, anti-memorização e seleção por held-out
+
+Para evitar que a neuroevolução **decore** os mapas de treino, há quatro frentes opcionais
+(todas desligadas por padrão — o caminho determinístico dos testes é preservado bit-a-bit).
+
+**`core/TrackGen` (sem SFML)** — opera sobre `TrackData` (descrição de pista desacoplada de
+arquivo) que o `Track` constrói em memória pela mesma pipeline da carga JSON (`Track::loadData`
++ `Track(const TrackData&)`):
+- **Augmentation** (`mirrorX`, `reverse`, `scaleWidth`): variantes estáticas de cada mapa base,
+  anexadas ao conjunto de treino via `--augment`. Jitter de largura é variante pré-construída
+  (não rebuild por episódio), mantendo o caminho quente barato.
+- **Geração procedural** (`generateLoop`, semeada): raio como soma de harmônicos de baixa
+  frequência → loop *star-convex* (sem auto-interseção) e suave. Cada candidato é validado
+  (arco > 0, sem auto-overlap do ribbon, footprint do carro dentro ao longo de toda a pista,
+  e spawn dentro) com re-sorteio até `maxAttempts`; fallback elíptico determinístico.
+
+**Randomização por episódio** (`Game::EpisodeConfig`, default reproduz o episódio legado):
+- **Spawn aleatório** ao longo do centerline. O progresso passa a ser medido **relativo ao
+  spawn** (`Car::spawnArcFrac`): com `spawnArcFrac == 0` (padrão) é idêntico ao atual; com spawn
+  no meio da pista o carro não ganha progresso grátis no tick 0 e precisa completar uma volta a
+  partir de onde nasceu.
+- **Ruído de sensor** aplicado às leituras de raio no loop de `simulateEpisode` (não no `Car`).
+- **N episódios por avaliação** (`TrainingSession::evalCar`), agregados por média/mínimo, com
+  seed por episódio derivada de `(seed, geração, mapa, carro, episódio)`.
+
+**Seleção por held-out** (3 conjuntos: treino / validação / teste): com `--select-by-val`,
+`best.rnnw` é o genoma com **melhor progresso de validação** entre os top-K do treino
+(`selectChampionByVal`), não o melhor fitness de treino. O conjunto de **teste** (`--test-maps`)
+é só relatório (`test_log.csv`), nunca usado na seleção — preserva uma métrica não-contaminada.
+Validação/teste rodam com episódio **determinístico** (spawn fixo, sem ruído) para métricas
+comparáveis.
+
+---
+
 ## Como estender o projeto
 
 ### Adicionar um novo algoritmo de ML

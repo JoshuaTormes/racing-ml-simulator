@@ -11,6 +11,7 @@
 #include "core/Constants.h"
 #include "core/Types.h"
 #include "Track.h"
+#include "core/TrackGen.h"
 #include "Car.h"
 #include "Sensor.h"
 #include "NeuralNetwork.h"
@@ -91,9 +92,167 @@ static void test_track_geometry() {
     ASSERT(track.totalArcLength() > 0.f);
 }
 
+// ---------- In-memory Track construction (TrackData) ----------
+static void test_track_inmemory() {
+    // Build a simple square loop directly from TrackData (no file).
+    TrackData d;
+    d.name       = "mem_square";
+    d.closed     = true;
+    d.trackWidth = 100.f;
+    d.waypoints  = { {200, 200}, {600, 200}, {600, 600}, {200, 600} };
+    Track t(d);
+    ASSERT(t.isInsideTrack(t.spawnPos()));
+    ASSERT(t.totalArcLength() > 0.f);
+    ASSERT(!t.centerline().empty());
+    ASSERT(t.trackWidth() == 100.f);
+    ASSERT(t.name() == "mem_square");
+
+    // loadData + in-memory ctor must reproduce the JSON ctor exactly.
+    Track viaFile("maps/map1_chicanes_infernais.json");
+    Track viaData(Track::loadData("maps/map1_chicanes_infernais.json"));
+    ASSERT(std::fabs(viaFile.totalArcLength() - viaData.totalArcLength()) < 1e-3f);
+    ASSERT(viaFile.centerline().size() == viaData.centerline().size());
+
+    // Validation: too few waypoints and non-positive width must throw.
+    TrackData bad = d; bad.waypoints = { {0,0}, {1,1} };
+    ASSERT_THROW(Track{bad}, std::runtime_error);
+    TrackData badW = d; badW.trackWidth = 0.f;
+    ASSERT_THROW(Track{badW}, std::runtime_error);
+}
+
+// ---------- Random spawn: progress is relative, no free progress at tick 0 ----------
+static void test_random_spawn_progress() {
+    // A trivial "drive straight, full throttle" controller.
+    struct StraightCtrl : AIController {
+        Action decide(const Observation&) override { return {1.f, 0.f}; }
+    };
+
+    Track track("tests/fixtures/oval.json");
+
+    // Spawn mid-track via the relative-progress reset overload. The car must NOT be
+    // credited the spawn arc as progress on tick 0.
+    Car car;
+    float arc0 = track.totalArcLength() * 0.7f;
+    Vec2  p    = track.centerlineAtArc(arc0);
+    Vec2  t    = track.tangentAtArc(arc0);
+    car.reset(p, std::atan2(t.y, t.x), 0.7f);
+    RewardConfig reward;
+    StraightCtrl ctrl;
+    Observation obs = car.observe(track);
+    car.applyAction(ctrl.decide(obs));
+    car.stepDone(track, reward);
+    ASSERT(car.maxProgress < 0.1f); // no free 0.7 progress at the very first tick
+
+    // Determinism: same EpisodeConfig.seed → identical result; randomSpawn with
+    // different seeds → (almost surely) different spawn → different outcome.
+    StraightCtrl c1, c2, c3;
+    EpisodeConfig ep; ep.seed = 123; ep.randomSpawn = true;
+    auto r1 = Game::simulateEpisode(track, c1, reward, ep);
+    auto r2 = Game::simulateEpisode(track, c2, reward, ep);
+    ASSERT(std::fabs(r1.maxProgress - r2.maxProgress) < 1e-6f);
+    ASSERT(std::fabs(r1.fitness - r2.fitness) < 1e-4f);
+
+    EpisodeConfig ep2; ep2.seed = 999; ep2.randomSpawn = true;
+    auto r3 = Game::simulateEpisode(track, c3, reward, ep2);
+    (void)r3; // different seed: just must not crash; outcome may differ
+
+    // Default EpisodeConfig must reproduce the legacy fixed-spawn episode exactly.
+    StraightCtrl d1, d2;
+    auto legacy   = Game::simulateEpisode(track, d1, reward);
+    auto explicit_ = Game::simulateEpisode(track, d2, reward, EpisodeConfig{});
+    ASSERT(std::fabs(legacy.fitness - explicit_.fitness) < 1e-6f);
+    ASSERT(std::fabs(legacy.maxProgress - explicit_.maxProgress) < 1e-6f);
+    ASSERT(legacy.doneReason == explicit_.doneReason);
+}
+
+// ---------- Augmentation transforms (B): mirror / reverse / width-scale ----------
+static void test_augment_transforms() {
+    TrackData base = Track::loadData("tests/fixtures/oval.json");
+    Track baseT(base);
+
+    // mirror: same arc length, still drivable, name suffixed.
+    {
+        TrackData m = trackgen::mirrorX(base);
+        Track mt(m);
+        ASSERT(mt.name() == base.name + "_mirror");
+        ASSERT(mt.isInsideTrack(mt.spawnPos()));
+        ASSERT(std::fabs(mt.totalArcLength() - baseT.totalArcLength()) < 1.0f);
+        // A point on the base centerline reflects to inside the mirrored track.
+        float minX = base.waypoints[0].x, maxX = minX;
+        for (auto& w : base.waypoints) { minX = std::min(minX, w.x); maxX = std::max(maxX, w.x); }
+        float cx = 0.5f * (minX + maxX);
+        Vec2 q = baseT.centerlineAtArc(baseT.totalArcLength() * 0.3f);
+        ASSERT(mt.isInsideTrack({2.f * cx - q.x, q.y}));
+    }
+    // reverse: same arc length, drivable.
+    {
+        TrackData r = trackgen::reverse(base);
+        Track rt(r);
+        ASSERT(rt.name() == base.name + "_rev");
+        ASSERT(rt.isInsideTrack(rt.spawnPos()));
+        ASSERT(std::fabs(rt.totalArcLength() - baseT.totalArcLength()) < 1.0f);
+    }
+    // width-scale: half-width grows by the factor.
+    {
+        TrackData w = trackgen::scaleWidth(base, 2.0f);
+        Track wt(w);
+        ASSERT(std::fabs(wt.trackWidth() - base.trackWidth * 2.0f) < 1e-3f);
+        // A point ~0.9*halfWidth (scaled) off the centerline is inside the wide track
+        // but outside the base track.
+        float arc = baseT.totalArcLength() * 0.25f;
+        Vec2 c = baseT.centerlineAtArc(arc);
+        Vec2 tan = baseT.tangentAtArc(arc);
+        Vec2 nrm = tan.perpendicular();
+        float off = base.trackWidth * 0.5f * 1.4f; // beyond base half-width, within 2x
+        Vec2 probe = {c.x + nrm.x * off, c.y + nrm.y * off};
+        ASSERT(wt.isInsideTrack(probe));
+        ASSERT(!baseT.isInsideTrack(probe));
+    }
+}
+
+// ---------- Procedural generation (A): reproducible + valid loops ----------
+static void test_procedural_generation() {
+    trackgen::GenParams p; // defaults
+
+    // Reproducible: same seed → identical waypoints/width; different seed → different.
+    TrackData a1 = trackgen::generateLoop(42, p);
+    TrackData a2 = trackgen::generateLoop(42, p);
+    ASSERT(a1.waypoints.size() == a2.waypoints.size());
+    ASSERT(std::fabs(a1.trackWidth - a2.trackWidth) < 1e-6f);
+    bool identical = a1.waypoints.size() == a2.waypoints.size();
+    for (size_t i = 0; i < a1.waypoints.size() && identical; ++i)
+        identical = std::fabs(a1.waypoints[i].x - a2.waypoints[i].x) < 1e-6f
+                 && std::fabs(a1.waypoints[i].y - a2.waypoints[i].y) < 1e-6f;
+    ASSERT(identical);
+
+    TrackData b = trackgen::generateLoop(7, p);
+    bool differs = (b.waypoints.size() != a1.waypoints.size());
+    for (size_t i = 0; i < a1.waypoints.size() && !differs; ++i)
+        differs = std::fabs(a1.waypoints[i].x - b.waypoints[i].x) > 1e-3f;
+    ASSERT(differs);
+
+    // Validity: generated loops are drivable for many seeds (≥3 wps, closed, positive
+    // arc length, width within band, and a car spawned on it does not immediately
+    // collide — the realistic drivability check the simulation uses, via car corners).
+    for (std::uint32_t s = 0; s < 25; ++s) {
+        TrackData d = trackgen::generateLoop(s, p);
+        Track t(d);
+        ASSERT(d.waypoints.size() >= 3);
+        ASSERT(d.closed);
+        ASSERT(t.totalArcLength() > 0.f);
+        ASSERT(d.trackWidth >= p.widthMin - 1e-3f && d.trackWidth <= p.widthMax + 1e-3f);
+
+        Car car;
+        car.reset(t.spawnPos(), t.spawnAngle());
+        RewardConfig rc;
+        car.stepDone(t, rc); // one tick, car stationary at spawn
+        ASSERT(car.doneReason != DoneReason::Collision);
+    }
+}
+
 // ---------- Centerline interpolates through design waypoints ----------
 static void test_centerline_passes_through_waypoints() {
-    for (const std::string& path : {"maps/map1_chicanes_infernais.json", "maps/map6.json"}) {
+    for (const std::string& path : {"maps/map1_chicanes_infernais.json", "tests/fixtures/oval.json"}) {
         Track track(path);
         const auto& dwps = track.designWaypoints();
         const auto& center = track.centerline();
@@ -122,7 +281,7 @@ static void test_arc_length_monotonic() {
 static void test_projection_idempotent() {
     // Use the simple oval track: chicane maps can have near-self-intersections
     // that cause the K=16 local search to snap to the wrong segment.
-    Track track("maps/map6.json");
+    Track track("tests/fixtures/oval.json");
     float L = track.totalArcLength();
     ASSERT(L > 0.f);
 
@@ -147,7 +306,7 @@ static void test_projection_idempotent() {
 
 // ---------- Projection state segIdx tracks forward motion ----------
 static void test_projection_local_search() {
-    Track track("maps/map6.json");
+    Track track("tests/fixtures/oval.json");
     ProjectionState st;
     float L = track.totalArcLength();
     int prevSeg = st.segIdx;
@@ -425,6 +584,49 @@ static void test_training_session_headless() {
     std::filesystem::remove_all(outDir);
 }
 
+// ---------- Held-out model selection (D): best.rnnw chosen by validation ----------
+static void test_heldout_selection() {
+    SimConfig cfg;
+    cfg.population = 30;
+    cfg.headless   = true;
+    cfg.threads    = 1;
+    cfg.seed       = 7;
+
+    auto outDir = (std::filesystem::temp_directory_path() / "racing_ml_test_heldout").string();
+    std::filesystem::remove_all(outDir);
+
+    MultiMapConfig mm;
+    mm.fitnessAgg      = FitnessAgg::CVaRRank;
+    mm.curriculum.mode = CurriculumMode::None;
+    mm.selectByVal     = true;
+    mm.valSelectTopK   = 5;
+
+    // Train and validate on the same clean oval (deterministic, no overfit concern
+    // here — we only assert the *selection mechanics*).
+    std::vector<std::string> oval = {"tests/fixtures/oval.json"};
+    TrainingSession session(cfg, makeTrainer("genetic"), 3, outDir, oval, oval, mm);
+    session.runAll();
+
+    ASSERT(std::filesystem::exists(outDir + "/best.rnnw"));
+    ASSERT(std::filesystem::exists(outDir + "/gen_0003.rnnw"));
+
+    // best.rnnw maximizes validation progress among the top-K train genomes, which
+    // always include the train-best. So its val progress must be >= the train-best's.
+    Track val("tests/fixtures/oval.json");
+    RewardConfig reward;
+    auto progOf = [&](const std::string& path) {
+        NeuralNetwork nn(defaultTopology());
+        nn.load(path);
+        NeuralNetworkController ctrl(std::move(nn));
+        return Game::simulateEpisode(val, ctrl, reward).maxProgress;
+    };
+    float bestProg  = progOf(outDir + "/best.rnnw");
+    float trainProg = progOf(outDir + "/gen_0003.rnnw");
+    ASSERT(bestProg + 1e-4f >= trainProg);
+
+    std::filesystem::remove_all(outDir);
+}
+
 // ---------- Reverse blocked (task A) ----------
 // With MAX_REVERSE_SPEED=0 (default), negative throttle must never produce speed < 0.
 static void test_reverse_blocked() {
@@ -514,31 +716,33 @@ static void test_regress_penalty() {
     cfg.w_reverse = 0.0f; // isolate C
     car.reset(track.spawnPos(), track.spawnAngle());
 
-    // Drive forward to build up maxProgress
+    // Drive forward to build up maxProgress. The fitness-composition invariant in
+    // Car::stepDone holds on every NON-terminal tick; terminal events (crash/complete)
+    // add bonus/penalty on top, so we verify the invariant only while the car is still
+    // running and stop at the first terminal tick. This keeps the test robust to the
+    // geometry of map1 (a narrow chicane map where a straight drive crashes quickly).
     Action fwd; fwd.throttle = 1.f; fwd.steering = 0.f;
     for (int i = 0; i < 60; ++i) {
         car.applyAction(fwd);
         car.stepDone(track, cfg);
+        if (car.done) break;
+
+        // regressPenalty stays non-negative (can only grow when behind peak)
+        ASSERT(car.regressPenalty >= 0.f);
+
+        // Fitness formula: w_progress * maxProgress + speedBonus + checkpointBonus
+        //                  - reversePenalty - regressPenalty - curvePenalty
+        float expected = cfg.w_progress * car.maxProgress
+                       + car.speedBonus + car.checkpointBonus
+                       - car.reversePenalty - car.regressPenalty - car.curvePenalty;
+        ASSERT(std::fabs(car.fitness - expected) < 1e-3f);
+
+        // fitness must not exceed progress + bonuses (penalties only subtract)
+        float upperBound = cfg.w_progress * car.maxProgress
+                         + car.speedBonus + car.checkpointBonus;
+        ASSERT(car.fitness <= upperBound + 1e-3f);
     }
-    float peakProgress = car.maxProgress;
-    ASSERT(peakProgress > 0.f);
-
-    // At peak, regressPenalty should be 0 (car is at or ahead of max)
-    ASSERT(car.regressPenalty >= 0.f);
-
-    // Fitness formula: w_progress * maxProgress + speedBonus + checkpointBonus
-    //                  - reversePenalty - regressPenalty - curvePenalty
-    float fitnessAtPeak = car.fitness;
-    float expected = cfg.w_progress * peakProgress
-                   + car.speedBonus + car.checkpointBonus
-                   - car.reversePenalty - car.regressPenalty - car.curvePenalty;
-    ASSERT(std::fabs(fitnessAtPeak - expected) < 1e-3f);
-
-    // regressPenalty stays non-negative (can only grow when behind peak)
-    ASSERT(car.regressPenalty >= 0.f);
-    // fitness must not exceed progress + bonuses (penalties only subtract)
-    float upperBound = cfg.w_progress * car.maxProgress + car.speedBonus + car.checkpointBonus;
-    ASSERT(car.fitness <= upperBound + 1e-3f);
+    ASSERT(car.maxProgress > 0.f);
 }
 
 // ---------- Stall by no-progress (task D) ----------
@@ -952,7 +1156,7 @@ static void test_track_spatial_grid() {
     std::mt19937 rng(12345);
 
     for (const char* path : {"maps/map1_chicanes_infernais.json", "maps/map4_obstaculos.json",
-                              "maps/map6.json"}) {
+                              "tests/fixtures/oval.json"}) {
         Track track(path);
 
         // Compute AABB from spawn position as reference origin.
@@ -1001,6 +1205,18 @@ int main() {
     test_track_geometry();
     std::cout << "Track geometry: ok\n";
 
+    test_track_inmemory();
+    std::cout << "Track in-memory (TrackData): ok\n";
+
+    test_random_spawn_progress();
+    std::cout << "Random spawn + relative progress (C): ok\n";
+
+    test_augment_transforms();
+    std::cout << "Augmentation transforms (B): ok\n";
+
+    test_procedural_generation();
+    std::cout << "Procedural generation (A): ok\n";
+
     test_centerline_passes_through_waypoints();
     std::cout << "Centerline passes through waypoints: ok\n";
 
@@ -1042,6 +1258,9 @@ int main() {
 
     test_training_session_headless();
     std::cout << "TrainingSession headless: ok\n";
+
+    test_heldout_selection();
+    std::cout << "Held-out model selection (D): ok\n";
 
     test_game_episode_terminates();
     std::cout << "Game headless episode: ok\n";

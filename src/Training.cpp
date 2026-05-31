@@ -3,6 +3,8 @@
 #include "NeuralNetwork.h"
 #include "Car.h"
 #include "core/Constants.h"
+#include "core/TrackGen.h"
+#include <stdexcept>
 #include <filesystem>
 #include <iostream>
 #include <iomanip>
@@ -25,7 +27,8 @@ TrainingSession::TrainingSession(SimConfig sim,
                                  std::vector<std::string> valMaps,
                                  MultiMapConfig mmCfg,
                                  const std::vector<float>* resumeChampion,
-                                 bool logCsv)
+                                 bool logCsv,
+                                 std::vector<std::string> testMaps)
     : game_(sim)
     , trainer_(std::move(trainer))
     , generations_(generations)
@@ -33,7 +36,9 @@ TrainingSession::TrainingSession(SimConfig sim,
     , bestGlobalF_(-std::numeric_limits<float>::infinity())
     , trainMaps_(std::move(trainMaps))
     , valMaps_(std::move(valMaps))
+    , testMaps_(std::move(testMaps))
     , mmCfg_(mmCfg)
+    , bestValScore_(-std::numeric_limits<float>::infinity())
     , logCsv_(logCsv)
 {
     if (trainMaps_.empty())
@@ -47,18 +52,60 @@ TrainingSession::TrainingSession(SimConfig sim,
     else
         trainer_->init((size_t)sim.population, weightCount, sim.seed);
 
+    // Base training tracks from file paths.
+    trainTracks_.reserve(trainMaps_.size());
+    for (const auto& path : trainMaps_)
+        trainTracks_.push_back(std::make_unique<Track>(path));
+
+    // Static augmentation: expand the training set with cheap transforms of each base
+    // map (mirror / reverse / width-scale). Variants become additional training maps.
+    if (!mmCfg_.augment.empty()) {
+        std::vector<TrackData> baseData;
+        baseData.reserve(trainMaps_.size());
+        for (const auto& path : trainMaps_)
+            baseData.push_back(Track::loadData(path));
+        for (const auto& base : baseData) {
+            for (const auto& tok : mmCfg_.augment) {
+                TrackData d;
+                if      (tok == "mirror")              d = trackgen::mirrorX(base);
+                else if (tok == "reverse")             d = trackgen::reverse(base);
+                else if (tok.rfind("width:", 0) == 0)  d = trackgen::scaleWidth(base, std::stof(tok.substr(6)));
+                else throw std::runtime_error("Unknown --augment token: " + tok);
+                trainMaps_.push_back(d.name);
+                trainTracks_.push_back(std::make_unique<Track>(d));
+            }
+        }
+    }
+
+    // Procedural training tracks (deterministic from the training seed).
+    for (int i = 0; i < mmCfg_.proceduralTrain; ++i) {
+        unsigned s = sim.seed * 2654435761u + 0x00C0FFEEu + (unsigned)i;
+        TrackData d = trackgen::generateLoop(s, mmCfg_.genParams);
+        trainMaps_.push_back(d.name);
+        trainTracks_.push_back(std::make_unique<Track>(d));
+    }
+
+    // Size per-map buffers to the final (possibly augmented) training set.
     perMapFitness_.assign(trainMaps_.size(),
                           std::vector<float>(trainer_->populationSize(), 0.f));
     perMapDoneReasons_.assign(trainMaps_.size(),
                               std::vector<DoneReason>(trainer_->populationSize(), DoneReason::None));
 
-    trainTracks_.reserve(trainMaps_.size());
-    for (const auto& path : trainMaps_)
-        trainTracks_.push_back(std::make_unique<Track>(path));
-
     valTracks_.reserve(valMaps_.size());
     for (const auto& path : valMaps_)
         valTracks_.push_back(std::make_unique<Track>(path));
+
+    // Procedural validation tracks (deterministic from the training seed).
+    for (int i = 0; i < mmCfg_.proceduralVal; ++i) {
+        unsigned s = sim.seed * 40503u + 0x00BADA55u + (unsigned)i;
+        TrackData d = trackgen::generateLoop(s, mmCfg_.genParams);
+        valMaps_.push_back(d.name);
+        valTracks_.push_back(std::make_unique<Track>(d));
+    }
+
+    testTracks_.reserve(testMaps_.size());
+    for (const auto& path : testMaps_)
+        testTracks_.push_back(std::make_unique<Track>(path));
 
     workerCount_ = sim.threads > 0
         ? sim.threads
@@ -165,6 +212,37 @@ void TrainingSession::advanceIfMapDone() {
     }
 }
 
+// Decorrelated per-episode seed (deterministic given the training seed + indices).
+static unsigned mixSeed(unsigned a, unsigned b, unsigned c, unsigned d, unsigned e) {
+    unsigned h = a + 0x9e3779b9u;
+    for (unsigned v : {b, c, d, e})
+        h ^= v + 0x9e3779b9u + (h << 6) + (h >> 2);
+    return h;
+}
+
+Game::EpisodeResult TrainingSession::evalCar(const Track& track, const NeuralNetwork& net,
+                                             const RewardConfig& reward,
+                                             size_t mapIdx, size_t carIdx) const {
+    int E = std::max(1, mmCfg_.episodesPerEval);
+    NeuralNetworkController ctrl(net); // copies net; scratch buffers stay caller-local
+    Game::EpisodeResult rep{};
+    float aggF = (mmCfg_.episodeAgg == EpisodeAgg::Min)
+                    ? std::numeric_limits<float>::infinity() : 0.f;
+    for (int e = 0; e < E; ++e) {
+        EpisodeConfig ep;
+        ep.seed        = mixSeed(game_.config().seed, (unsigned)currentGen_,
+                                 (unsigned)mapIdx, (unsigned)carIdx, (unsigned)e);
+        ep.randomSpawn = mmCfg_.randomSpawn;
+        ep.sensorNoise = mmCfg_.sensorNoise;
+        auto r = Game::simulateEpisode(track, ctrl, reward, ep);
+        if (e == 0) rep = r; // representative maxProgress/doneReason/episodeTime
+        if (mmCfg_.episodeAgg == EpisodeAgg::Min) aggF = std::min(aggF, r.fitness);
+        else                                       aggF += r.fitness;
+    }
+    rep.fitness = (mmCfg_.episodeAgg == EpisodeAgg::Min) ? aggF : aggF / (float)E;
+    return rep;
+}
+
 // ---------------------------------------------------------------------------
 // Core generation loop
 // ---------------------------------------------------------------------------
@@ -239,8 +317,7 @@ void TrainingSession::evaluateGenerationParallel() {
                     size_t ai = t / P;
                     size_t c  = t % P;
                     size_t mi = (size_t)activeIdx[ai];
-                    NeuralNetworkController ctrl(nets[c]);
-                    auto r = Game::simulateEpisode(*trainTracks_[mi], ctrl, reward);
+                    auto r = evalCar(*trainTracks_[mi], nets[c], reward, mi, c);
                     perMapFitness_[mi][c]     = r.fitness;
                     perMapDoneReasons_[mi][c] = r.doneReason;
                     if (mi == 0) diagReasons_[c] = r.doneReason;
@@ -261,8 +338,7 @@ void TrainingSession::evaluateGenerationParallel() {
                 workers.emplace_back([&]() {
                     size_t c;
                     while ((c = next.fetch_add(1, std::memory_order_relaxed)) < P) {
-                        NeuralNetworkController ctrl(nets[c]);
-                        auto r = Game::simulateEpisode(*trainTracks_[firstMap], ctrl, reward);
+                        auto r = evalCar(*trainTracks_[firstMap], nets[c], reward, firstMap, c);
                         perMapFitness_[firstMap][c]     = r.fitness;
                         perMapDoneReasons_[firstMap][c] = r.doneReason;
                         diagReasons_[c] = r.doneReason;
@@ -305,8 +381,7 @@ void TrainingSession::evaluateGenerationParallel() {
                         size_t ki = t % K;
                         size_t mi = (size_t)activeIdx[ai];
                         size_t c  = topK[ki];
-                        NeuralNetworkController ctrl(nets[c]);
-                        auto r = Game::simulateEpisode(*trainTracks_[mi], ctrl, reward);
+                        auto r = evalCar(*trainTracks_[mi], nets[c], reward, mi, c);
                         perMapFitness_[mi][c]     = r.fitness;
                         perMapDoneReasons_[mi][c] = r.doneReason;
                     }
@@ -417,16 +492,21 @@ void TrainingSession::finalizeGeneration() {
         nn.setWeights(trainer_->weights(bestIdx));
         nn.save(fname.str());
     }
-    // Under CVaRRank, aggregated score saturates at 1.0 every generation,
-    // so track raw fitness on the primary map instead to update best.rnnw.
-    float saveCriterion = (mmCfg_.fitnessAgg == FitnessAgg::CVaRRank && !perMapFitness_.empty())
-        ? perMapFitness_[0][bestIdx]
-        : best;
-    if (saveCriterion > bestGlobalF_) {
-        bestGlobalF_ = saveCriterion;
-        NeuralNetwork nn(defaultTopology());
-        nn.setWeights(trainer_->weights(bestIdx));
-        nn.save(outDir_ + "/best.rnnw");
+    // best.rnnw selection. Default (legacy): by raw train fitness (CVaRRank uses
+    // the primary-map raw score, since rank-aggregated scores saturate at 1.0).
+    // When selectByVal is enabled and validation maps exist, the champion is chosen
+    // by validation performance instead — handled in the held-out block below.
+    const bool valSelection = mmCfg_.selectByVal && !valTracks_.empty();
+    if (!valSelection) {
+        float saveCriterion = (mmCfg_.fitnessAgg == FitnessAgg::CVaRRank && !perMapFitness_.empty())
+            ? perMapFitness_[0][bestIdx]
+            : best;
+        if (saveCriterion > bestGlobalF_) {
+            bestGlobalF_ = saveCriterion;
+            NeuralNetwork nn(defaultTopology());
+            nn.setWeights(trainer_->weights(bestIdx));
+            nn.save(outDir_ + "/best.rnnw");
+        }
     }
 
     printStats(stats);
@@ -435,10 +515,16 @@ void TrainingSession::finalizeGeneration() {
     lastStats_ = stats;
     history_.push_back(stats);
 
-    // ---- Held-out ------------------------------------------------------------
-    bool isLastGen = (currentGen_ + 1 == generations_);
-    bool isValGen  = (!valMaps_.empty()) && ((currentGen_ + 1) % valEvery_ == 0 || isLastGen);
-    if (isValGen) evaluateHeldOut(bestIdx);
+    // ---- Held-out validation / test ------------------------------------------
+    bool isLastGen   = (currentGen_ + 1 == generations_);
+    bool wantHeldOut = !valMaps_.empty() || !testMaps_.empty();
+    bool isValGen    = wantHeldOut && ((currentGen_ + 1) % valEvery_ == 0 || isLastGen);
+    if (isValGen) {
+        // Champion to report (and, under selectByVal, to save as best.rnnw):
+        // chosen by validation when enabled, else the train-best.
+        size_t champ = valSelection ? selectChampionByVal(agg) : bestIdx;
+        evaluateHeldOut(champ);
+    }
 
     trainer_->evolve();
     ++currentGen_;
@@ -469,46 +555,105 @@ bool TrainingSession::done() const {
 }
 
 // ---------------------------------------------------------------------------
-// Held-out validation
+// Held-out validation / test
 // ---------------------------------------------------------------------------
-void TrainingSession::evaluateHeldOut(size_t championIdx) {
-    if (valMaps_.empty()) return;
+static std::string doneReasonStr(DoneReason r) {
+    switch (r) {
+        case DoneReason::Completed: return "completed";
+        case DoneReason::Collision: return "collision";
+        case DoneReason::Stall:     return "stall";
+        case DoneReason::Timeout:   return "timeout";
+        default:                    return "?";
+    }
+}
 
+void TrainingSession::logChampionOnMaps(const char* label,
+                                        const std::vector<std::unique_ptr<Track>>& tracks,
+                                        const std::vector<std::string>& names,
+                                        size_t championIdx,
+                                        std::ofstream& log) {
     const auto& champWeights = trainer_->weights(championIdx);
     const RewardConfig& reward = game_.config().reward;
 
-    std::cout << "  [held-out gen=" << currentGen_ + 1 << "]\n";
+    if (logCsv_ && log.is_open())
+        log << currentGen_ + 1;
 
-    if (logCsv_ && heldOutLog_.is_open())
-        heldOutLog_ << currentGen_ + 1;
-
-    for (size_t vi = 0; vi < valTracks_.size(); ++vi) {
+    for (size_t vi = 0; vi < tracks.size(); ++vi) {
         NeuralNetwork nn(defaultTopology());
         nn.setWeights(champWeights);
         NeuralNetworkController ctrl(std::move(nn));
-        auto r = Game::simulateEpisode(*valTracks_[vi], ctrl, reward);
+        auto r = Game::simulateEpisode(*tracks[vi], ctrl, reward);
 
-        std::string reason;
-        switch (r.doneReason) {
-            case DoneReason::Completed: reason = "completed"; break;
-            case DoneReason::Collision: reason = "collision"; break;
-            case DoneReason::Stall:     reason = "stall";     break;
-            case DoneReason::Timeout:   reason = "timeout";   break;
-            default:                    reason = "?";         break;
-        }
-        auto mapName = std::filesystem::path(valMaps_[vi]).stem().string();
+        std::string reason = doneReasonStr(r.doneReason);
+        auto mapName = std::filesystem::path(names[vi]).stem().string();
         std::cout << std::fixed << std::setprecision(3)
-                  << "    val[" << mapName << "]: prog=" << r.maxProgress
+                  << "    " << label << "[" << mapName << "]: prog=" << r.maxProgress
                   << " reason=" << reason << "\n";
 
-        if (logCsv_ && heldOutLog_.is_open())
-            heldOutLog_ << "," << r.maxProgress << "," << reason << "," << r.fitness;
+        if (logCsv_ && log.is_open())
+            log << "," << r.maxProgress << "," << reason << "," << r.fitness;
     }
 
-    if (logCsv_ && heldOutLog_.is_open()) {
-        heldOutLog_ << "\n";
-        heldOutLog_.flush();
+    if (logCsv_ && log.is_open()) {
+        log << "\n";
+        log.flush();
     }
+}
+
+void TrainingSession::evaluateHeldOut(size_t championIdx) {
+    if (valMaps_.empty() && testMaps_.empty()) return;
+    std::cout << "  [held-out gen=" << currentGen_ + 1 << "]\n";
+    if (!valMaps_.empty())
+        logChampionOnMaps("val", valTracks_, valMaps_, championIdx, heldOutLog_);
+    if (!testMaps_.empty())
+        logChampionOnMaps("test", testTracks_, testMaps_, championIdx, testLog_);
+}
+
+float TrainingSession::meanProgressOn(const std::vector<std::unique_ptr<Track>>& tracks,
+                                      const std::vector<float>& weights) const {
+    if (tracks.empty()) return 0.f;
+    const RewardConfig& reward = game_.config().reward;
+    float sum = 0.f;
+    for (const auto& tr : tracks) {
+        NeuralNetwork nn(defaultTopology());
+        nn.setWeights(weights);
+        NeuralNetworkController ctrl(std::move(nn));
+        sum += Game::simulateEpisode(*tr, ctrl, reward).maxProgress;
+    }
+    return sum / (float)tracks.size();
+}
+
+size_t TrainingSession::selectChampionByVal(const std::vector<float>& agg) {
+    size_t P = agg.size();
+    if (P == 0) return 0;
+    int K = std::max(1, mmCfg_.valSelectTopK);
+    if ((size_t)K > P) K = (int)P;
+
+    // Top-K genomes by aggregated train fitness (always includes the train-best).
+    std::vector<size_t> order(P);
+    std::iota(order.begin(), order.end(), 0);
+    std::partial_sort(order.begin(), order.begin() + K, order.end(),
+                      [&](size_t a, size_t b) { return agg[a] > agg[b]; });
+
+    // Among those candidates, keep the one with the best mean validation progress.
+    size_t bestCand  = order[0];
+    float  bestScore = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < K; ++i) {
+        size_t c = order[(size_t)i];
+        float s  = meanProgressOn(valTracks_, trainer_->weights(c));
+        if (s > bestScore) { bestScore = s; bestCand = c; }
+    }
+
+    // Persist as best.rnnw only when it improves the validation high-water mark.
+    if (bestScore > bestValScore_) {
+        bestValScore_ = bestScore;
+        NeuralNetwork nn(defaultTopology());
+        nn.setWeights(trainer_->weights(bestCand));
+        nn.save(outDir_ + "/best.rnnw");
+        std::cout << std::fixed << std::setprecision(3)
+                  << "  [select-by-val] saved best.rnnw (val prog=" << bestScore << ")\n";
+    }
+    return bestCand;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +669,15 @@ void TrainingSession::runAll() {
             heldOutLog_ << ",m" << vi << "_progress,m" << vi << "_done_reason,m" << vi << "_fitness_raw";
         heldOutLog_ << "\n";
         heldOutLog_.flush();
+
+        if (!testMaps_.empty()) {
+            testLog_.open(outDir_ + "/test_log.csv", std::ios::trunc);
+            testLog_ << "gen";
+            for (size_t ti = 0; ti < testMaps_.size(); ++ti)
+                testLog_ << ",m" << ti << "_progress,m" << ti << "_done_reason,m" << ti << "_fitness_raw";
+            testLog_ << "\n";
+            testLog_.flush();
+        }
     }
 
     while (!done()) {

@@ -182,6 +182,17 @@ Car 0 (yellow) displays **sensor rays**: green = long distance, red = close to e
 --load <file.rnnw>      With --train: seeds population from champion. Without --train: opens watch mode
 --watch <file.rnnw>     Opens window with the saved network driving (no training)
 
+Generalization (anti-overfitting — all off by default)
+--train-maps / --val-maps / --test-maps   Train / validation / report-only map lists
+--augment <list>        Extra train maps: mirror,reverse,width:0.85,width:1.15
+--procedural-train <K>  Generate K seeded random tracks into the train set (--procedural-val too)
+--proc-width-min/max <w> Width band for procedural tracks (default 55..110)
+--random-spawn          Random start point per training episode (progress measured from spawn)
+--sensor-noise <s>      Gaussian noise (stddev) on ray readings during training
+--episodes-per-eval <N> Episodes per (genome,map), aggregated (--episode-agg mean|min)
+--select-by-val         Save best.rnnw by validation progress (top-K) instead of train fitness
+--val-select-topk <T>   Train genomes evaluated on validation for selection (default 1)
+
 --help / -h             Display help
 ```
 

@@ -10,7 +10,7 @@
 
 using json = nlohmann::json;
 
-Track::Track(const std::string& jsonPath) {
+TrackData Track::loadData(const std::string& jsonPath) {
     std::ifstream f(jsonPath);
     if (!f) throw std::runtime_error("Track: cannot open " + jsonPath);
 
@@ -23,17 +23,18 @@ Track::Track(const std::string& jsonPath) {
     if (!j.contains("waypoints") || !j.contains("track_width") || !j.contains("closed"))
         throw std::runtime_error("Track: missing required fields (waypoints/track_width/closed)");
 
-    name_       = j.contains("name") ? j["name"].get<std::string>()
+    TrackData d;
+    d.name       = j.contains("name") ? j["name"].get<std::string>()
                                       : std::filesystem::path(jsonPath).stem().string();
-    closed_     = j["closed"].get<bool>();
-    trackWidth_ = j["track_width"].get<float>();
+    d.closed     = j["closed"].get<bool>();
+    d.trackWidth = j["track_width"].get<float>();
 
     for (auto& wp : j["waypoints"]) {
         if (!wp.is_array() || wp.size() < 2)
             throw std::runtime_error("Track: invalid waypoint entry");
-        designWaypoints_.push_back({wp[0].get<float>(), wp[1].get<float>()});
+        d.waypoints.push_back({wp[0].get<float>(), wp[1].get<float>()});
     }
-    if (designWaypoints_.size() < 3)
+    if (d.waypoints.size() < 3)
         throw std::runtime_error("Track: need at least 3 waypoints");
 
     if (j.contains("obstacles")) {
@@ -52,9 +53,26 @@ Track::Track(const std::string& jsonPath) {
             } else {
                 throw std::runtime_error("Track: unknown obstacle type: " + t);
             }
-            obstacles_.push_back(o);
+            d.obstacles.push_back(o);
         }
     }
+    return d;
+}
+
+// JSON ctor delegates to the in-memory ctor after parsing.
+Track::Track(const std::string& jsonPath) : Track(loadData(jsonPath)) {}
+
+Track::Track(const TrackData& data) {
+    if (data.waypoints.size() < 3)
+        throw std::runtime_error("Track: need at least 3 waypoints");
+    if (data.trackWidth <= 0.f)
+        throw std::runtime_error("Track: track_width must be > 0");
+
+    name_            = data.name;
+    closed_          = data.closed;
+    trackWidth_      = data.trackWidth;
+    designWaypoints_ = data.waypoints;
+    obstacles_       = data.obstacles;
 
     buildCenterline();
     buildBorders();

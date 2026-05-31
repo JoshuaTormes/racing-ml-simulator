@@ -11,6 +11,17 @@ struct Obstacle {
     Vec2  size   = {0,0};  // Rect (half-extents stored internally as full size)
 };
 
+// Plain description of a track, decoupled from any file format. Lets a Track be
+// built in memory (procedural generation, augmentation) using the same geometry
+// pipeline as the JSON path. See Track::loadData() and Track(const TrackData&).
+struct TrackData {
+    std::vector<Vec2>     waypoints;
+    float                 trackWidth = 120.f;
+    bool                  closed     = true;
+    std::string           name;
+    std::vector<Obstacle> obstacles;
+};
+
 // Per-car projection onto the dense centerline.
 // segIdx + t identifies the location within one lap; arcLen is the cumulative arc
 // length within the current lap. `lap` counts full laps (can go negative when the
@@ -26,6 +37,13 @@ struct ProjectionState {
 class Track {
 public:
     explicit Track(const std::string& jsonPath);
+    // Build a track in memory (no file). Runs the same centerline/border/index
+    // pipeline as the JSON ctor. Throws on <3 waypoints or non-positive width.
+    explicit Track(const TrackData& data);
+
+    // Parse a map JSON into a TrackData without building geometry. Reused by the
+    // JSON ctor and by augmentation/procedural code that transforms the data.
+    static TrackData loadData(const std::string& jsonPath);
 
     // Geometry queries (SFML-free)
     bool  isInsideTrack(Vec2 p) const;

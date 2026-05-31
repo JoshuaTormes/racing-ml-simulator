@@ -116,6 +116,27 @@ Treina em vários mapas simultaneamente para produzir um agente que generaliza, 
 
 O **fitness agregado** (coluna `agg=` no terminal) é por padrão o **mínimo** entre mapas — força o agente a não ignorar nenhuma pista. Com `--fitness-agg mean` usa a média, mais tolerante a mapas difíceis.
 
+#### Combatendo overfitting (diversidade, anti-memorização e seleção por held-out)
+
+Quando o agente decora os mapas de treino mas falha em pistas novas, há quatro alavancas (todas opcionais, **desligadas por padrão**):
+
+```bash
+./build/racing_sim --train --headless --population 1000 --generations 1000 \
+  --train-maps maps/map1.json,maps/map4.json,maps/map5.json \
+  --augment mirror,reverse,width:0.85,width:1.15 \   # B) variantes estáticas dos mapas base
+  --procedural-train 8 \                              # A) pistas aleatórias geradas (semeadas)
+  --random-spawn --episodes-per-eval 3 --sensor-noise 0.02 \  # C) anti-memorização por episódio
+  --val-maps maps/map7.json --test-maps maps/map8.json \
+  --select-by-val --val-select-topk 10                # D) best.rnnw escolhido pela validação
+```
+
+- **A — diversidade:** `--procedural-train K` / `--procedural-val K` geram K pistas aleatórias (determinísticas pela seed); `--proc-width-min/--proc-width-max` controlam a faixa de largura.
+- **B — augmentation:** `--augment mirror,reverse,width:<f>` adiciona variantes de cada mapa base ao treino.
+- **C — anti-memorização:** `--random-spawn` (início aleatório na pista; progresso medido relativo ao spawn), `--episodes-per-eval N` (+ `--episode-agg mean|min`), `--sensor-noise <σ>`.
+- **D — seleção por held-out:** `--select-by-val` salva `best.rnnw` pelo **melhor desempenho na validação** (entre os top-K do treino), em vez do fitness de treino. `--test-maps` é **só relatório** (nunca usado na seleção) — gera `test_log.csv`.
+
+Acompanhe a curva de validação/teste ao vivo com `python3 tools/watch_training.py <out_dir>`.
+
 Arquivos gerados em `out/` (ou `--out <dir>`):
 
 | Arquivo | Conteúdo |
@@ -221,9 +242,23 @@ Treinamento
 
 Generalização multi-mapa
   --train-maps <a,b,...>  Lista de mapas de treino separados por vírgula
-  --val-maps <x,y>        Mapas de validação (não usados na seleção, apenas métricas)
+  --val-maps <x,y>        Mapas de validação (seleção quando --select-by-val)
+  --test-maps <x,y>       Mapas de teste: só relatório, nunca usados na seleção
   --fitness-agg <modo>    Como agregar fitness entre mapas: min (default) | mean
   (sem --train-maps: usa todos os *.json em maps/, split 6 treino / 2 val automático)
+
+Generalização (combate a overfitting — todas desligadas por padrão)
+  --augment <lista>       Variantes de treino: mirror,reverse,width:0.85,width:1.15
+  --procedural-train <K>  Gera K pistas aleatórias (semeadas) no conjunto de treino
+  --procedural-val <K>    Gera K pistas aleatórias (semeadas) no conjunto de validação
+  --proc-width-min <w>    Largura mínima das pistas procedurais (default 55)
+  --proc-width-max <w>    Largura máxima das pistas procedurais (default 110)
+  --random-spawn          Início aleatório na pista a cada episódio de treino
+  --sensor-noise <s>      Ruído gaussiano (desvio) nas leituras de raio no treino
+  --episodes-per-eval <N> Episódios por (genoma,mapa), agregados (default 1)
+  --episode-agg <modo>    Combina episódios: mean (default) | min
+  --select-by-val         Salva best.rnnw pela validação (top-K) em vez do fitness de treino
+  --val-select-topk <T>   Genomas de treino avaliados na validação para seleção (default 1)
 
 Watch / Interativo
   --watch <arquivo.rnnw>  Abre janela com a rede salva dirigindo (sem treino)

@@ -60,7 +60,19 @@ static void printUsage(const char* argv0) {
         << "  --versus <file.rnnw>  Human (↑↓←→ / WASD) vs saved network. Yellow = you, green = AI\n"
         << "\nMulti-map training & robustness\n"
         << "  --train-maps <a,b,..> Comma-separated list of training maps\n"
-        << "  --val-maps <x,y>      Comma-separated held-out maps (not used in selection)\n"
+        << "  --val-maps <x,y>      Comma-separated validation maps (model selection when --select-by-val)\n"
+        << "  --test-maps <x,y>     Comma-separated test maps: report-only, never used in selection\n"
+        << "  --select-by-val       Save best.rnnw by validation progress (top-K) instead of train fitness\n"
+        << "  --val-select-topk <T> Train genomes evaluated on val for selection (default 1)\n"
+        << "  --random-spawn        Start each training episode at a random point on the track\n"
+        << "  --sensor-noise <s>    Gaussian noise (stddev) added to ray readings in training\n"
+        << "  --episodes-per-eval <N> Episodes per (genome,map), aggregated (default 1)\n"
+        << "  --episode-agg <mode>  Combine episodes: mean (default) | min\n"
+        << "  --augment <list>      Add transformed train maps: mirror,reverse,width:0.85,width:1.15\n"
+        << "  --procedural-train <K> Generate K random tracks (seeded) into the train set\n"
+        << "  --procedural-val <K>  Generate K random tracks (seeded) into the validation set\n"
+        << "  --proc-width-min <w>  Min sampled width for procedural tracks (default 55)\n"
+        << "  --proc-width-max <w>  Max sampled width for procedural tracks (default 110)\n"
         << "  --fitness-agg <mode>  Aggregation: cvar-rank (default) | min | mean | cvar-raw\n"
         << "  --cvar-alpha <α>      CVaR tail fraction in (0,1] (default: 0.5). Used with cvar-rank/cvar-raw\n"
         << "  --map-norm <mode>     Per-map normalisation: zscore (default) | minmax | progress\n"
@@ -130,6 +142,7 @@ int main(int argc, char* argv[]) {
     std::string versusPath;
     std::string trainMapsArg;
     std::string valMapsArg;
+    std::string testMapsArg;
     bool explicitMap        = false;
     bool explicitTrainMaps  = false;
 
@@ -148,6 +161,17 @@ int main(int argc, char* argv[]) {
     std::string mapWeightsArg;
     float       progressiveFrac   = 1.0f;
     std::string finetuneMapArg;
+    bool        selectByVal       = false;
+    int         valSelectTopK     = 1;
+    int         episodesPerEval   = 1;
+    bool        randomSpawn       = false;
+    float       sensorNoise       = 0.f;
+    std::string episodeAggArg     = "mean";
+    std::string augmentArg;
+    int         proceduralTrain   = 0;
+    int         proceduralVal     = 0;
+    float       procWidthMin      = -1.f;  // -1 = use generator default
+    float       procWidthMax      = -1.f;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -167,6 +191,18 @@ int main(int argc, char* argv[]) {
             else if (arg == "--versus"       && i+1 < argc)  versusPath      = argv[++i];
             else if (arg == "--train-maps"   && i+1 < argc)  { trainMapsArg = argv[++i]; explicitTrainMaps = true; }
             else if (arg == "--val-maps"     && i+1 < argc)  valMapsArg      = argv[++i];
+            else if (arg == "--test-maps"    && i+1 < argc)  testMapsArg     = argv[++i];
+            else if (arg == "--select-by-val")               selectByVal     = true;
+            else if (arg == "--val-select-topk" && i+1 < argc) valSelectTopK = std::stoi(argv[++i]);
+            else if (arg == "--random-spawn")                randomSpawn     = true;
+            else if (arg == "--sensor-noise"     && i+1 < argc) sensorNoise   = std::stof(argv[++i]);
+            else if (arg == "--episodes-per-eval" && i+1 < argc) episodesPerEval = std::stoi(argv[++i]);
+            else if (arg == "--episode-agg"      && i+1 < argc) episodeAggArg  = argv[++i];
+            else if (arg == "--augment"          && i+1 < argc) augmentArg     = argv[++i];
+            else if (arg == "--procedural-train" && i+1 < argc) proceduralTrain = std::stoi(argv[++i]);
+            else if (arg == "--procedural-val"   && i+1 < argc) proceduralVal   = std::stoi(argv[++i]);
+            else if (arg == "--proc-width-min"   && i+1 < argc) procWidthMin    = std::stof(argv[++i]);
+            else if (arg == "--proc-width-max"   && i+1 < argc) procWidthMax    = std::stof(argv[++i]);
             else if (arg == "--fitness-agg"  && i+1 < argc)  fitnessAggArg   = argv[++i];
             else if (arg == "--cvar-alpha"   && i+1 < argc)  cvarAlpha       = std::stof(argv[++i]);
             else if (arg == "--map-norm"     && i+1 < argc)  mapNormArg      = argv[++i];
@@ -405,6 +441,11 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // Held-out test set: report-only, never used in selection.
+        std::vector<std::string> testMaps;
+        if (!testMapsArg.empty())
+            testMaps = splitComma(testMapsArg);
+
         // ----- Validate curriculum-schedule ----------------------------------
         CurriculumConfig currCfg;
         currCfg.mode  = currMode;
@@ -455,6 +496,68 @@ int main(int argc, char* argv[]) {
         mmCfg.mapNorm         = mapNorm;
         mmCfg.curriculum      = currCfg;
         mmCfg.progressiveFrac = progressiveFrac;
+        mmCfg.selectByVal     = selectByVal;
+        mmCfg.valSelectTopK   = valSelectTopK;
+        mmCfg.episodesPerEval = episodesPerEval;
+        mmCfg.randomSpawn     = randomSpawn;
+        mmCfg.sensorNoise     = sensorNoise;
+        mmCfg.episodeAgg      = (episodeAggArg == "min") ? EpisodeAgg::Min : EpisodeAgg::Mean;
+
+        if (episodeAggArg != "mean" && episodeAggArg != "min") {
+            std::cerr << "--episode-agg must be 'mean' or 'min', got " << episodeAggArg << "\n";
+            return 1;
+        }
+        if (episodesPerEval < 1) {
+            std::cerr << "--episodes-per-eval must be >= 1, got " << episodesPerEval << "\n";
+            return 1;
+        }
+        if (sensorNoise < 0.f) {
+            std::cerr << "--sensor-noise must be >= 0, got " << sensorNoise << "\n";
+            return 1;
+        }
+
+        // --procedural-train/val + optional width overrides
+        mmCfg.proceduralTrain = proceduralTrain;
+        mmCfg.proceduralVal   = proceduralVal;
+        if (proceduralTrain < 0 || proceduralVal < 0) {
+            std::cerr << "--procedural-train/--procedural-val must be >= 0\n";
+            return 1;
+        }
+        if (procWidthMin > 0.f) mmCfg.genParams.widthMin = procWidthMin;
+        if (procWidthMax > 0.f) mmCfg.genParams.widthMax = procWidthMax;
+        if (mmCfg.genParams.widthMin > mmCfg.genParams.widthMax) {
+            std::cerr << "--proc-width-min must be <= --proc-width-max\n";
+            return 1;
+        }
+
+        // --augment: validate tokens (mirror | reverse | width:<factor>)
+        if (!augmentArg.empty()) {
+            for (const auto& tok : splitComma(augmentArg)) {
+                if (tok == "mirror" || tok == "reverse") {
+                    mmCfg.augment.push_back(tok);
+                } else if (tok.rfind("width:", 0) == 0) {
+                    float f = std::stof(tok.substr(6));
+                    if (f <= 0.f) {
+                        std::cerr << "--augment width factor must be > 0, got " << f << "\n";
+                        return 1;
+                    }
+                    mmCfg.augment.push_back(tok);
+                } else {
+                    std::cerr << "--augment: unknown token '" << tok
+                              << "' (expected mirror | reverse | width:<factor>)\n";
+                    return 1;
+                }
+            }
+        }
+
+        if (valSelectTopK < 1) {
+            std::cerr << "--val-select-topk must be >= 1, got " << valSelectTopK << "\n";
+            return 1;
+        }
+        if (selectByVal && valMaps.empty()) {
+            std::cerr << "--select-by-val requires --val-maps (or an auto val split)\n";
+            return 1;
+        }
 
         // ----- --map-weights: parse and validate ----------------------------
         if (!mapWeightsArg.empty()) {
@@ -520,7 +623,7 @@ int main(int argc, char* argv[]) {
 
         if (cfg.headless) {
             TrainingSession session(cfg, makeTrainer(algo), generations, outDir,
-                                    trainMaps, valMaps, mmCfg, champion, logCsv);
+                                    trainMaps, valMaps, mmCfg, champion, logCsv, testMaps);
             session.runAll();
             return 0;
         }
@@ -528,7 +631,7 @@ int main(int argc, char* argv[]) {
 #ifndef HEADLESS_ONLY
         bool multiMap = (trainMaps.size() > 1);
         TrainingSession session(cfg, makeTrainer(algo), generations, outDir,
-                                trainMaps, valMaps, mmCfg, champion, logCsv);
+                                trainMaps, valMaps, mmCfg, champion, logCsv, testMaps);
         Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
 
         {

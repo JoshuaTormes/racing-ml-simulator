@@ -8,6 +8,15 @@
 #include <thread>
 #include <functional>
 
+// Per-episode randomization for Game::simulateEpisode. Defaults reproduce the legacy
+// deterministic episode exactly (fixed spawn, no sensor noise) — the seed is only
+// consulted when randomSpawn or sensorNoise>0 is set.
+struct EpisodeConfig {
+    unsigned seed        = 0;
+    bool     randomSpawn = false;
+    float    sensorNoise = 0.f;   // stddev of gaussian noise added to ray readings
+};
+
 class Game {
 public:
     explicit Game(SimConfig cfg);
@@ -53,7 +62,8 @@ public:
     };
     static EpisodeResult simulateEpisode(const Track& track,
                                          AIController& ctrl,
-                                         const RewardConfig& reward);
+                                         const RewardConfig& reward,
+                                         const EpisodeConfig& ep = {});
 
 private:
     SimConfig                              cfg_;
