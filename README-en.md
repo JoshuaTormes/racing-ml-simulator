@@ -365,14 +365,25 @@ Watch / Interactive
 ## Tests
 
 ```bash
-# Via CTest (run from the project root)
+# Via CTest
 ctest --test-dir build --output-on-failure
-
-# Directly (more verbose)
-./build/racing_tests
 ```
 
 Expected output:
+
+```
+Test project /path/to/racing-ml-sim/build
+    Start 1: all_tests
+1/1 Test #1: all_tests ........................   Passed    0.XX sec
+
+100% tests passed, 0 tests failed out of 1
+```
+
+To see each individual test case:
+
+```bash
+./build/racing_tests
+```
 
 ```
 === Racing ML Sim Tests ===
@@ -390,7 +401,7 @@ Trainers resume: ok
 TrainingSession headless: ok
 Game headless episode: ok
 
-Results: 136 passed, 0 failed
+Results: 286 passed, 0 failed
 ```
 
 ### What the tests cover

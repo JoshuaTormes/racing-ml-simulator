@@ -366,14 +366,25 @@ Watch / Interativo
 ## Testes
 
 ```bash
-# Via CTest (roda a partir da raiz do projeto)
+# Via CTest
 ctest --test-dir build --output-on-failure
-
-# Direto (mais verboso)
-./build/racing_tests
 ```
 
 Saída esperada:
+
+```
+Test project /path/to/racing-ml-sim/build
+    Start 1: all_tests
+1/1 Test #1: all_tests ........................   Passed    0.XX sec
+
+100% tests passed, 0 tests failed out of 1
+```
+
+Para ver o resultado de cada caso individualmente:
+
+```bash
+./build/racing_tests
+```
 
 ```
 === Racing ML Sim Tests ===

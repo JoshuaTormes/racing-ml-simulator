@@ -3,7 +3,7 @@
   "generations": 1500,
   "threads": 8,
   "seed": 42,
-  "headless": true,
+  "headless": false,
   "out": "out_v2",
   "log_csv": true,
 
