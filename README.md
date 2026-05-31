@@ -192,6 +192,20 @@ Arquivos gerados no diretório definido em `out`:
 | `held_out_log.csv` | Métricas de validação por geração (requer `--log-csv`) |
 | `test_log.csv` | Métricas do conjunto de teste (requer `--log-csv` + `test_maps`) |
 
+### Retomando um treino
+
+Para continuar a partir de um checkpoint salvo, use `--load` apontando para o `.rnnw` desejado. O simulador usa os pesos do campeão para semear a população inicial e retoma o treino a partir daí:
+
+```bash
+./build/racing_sim --train --load out_v2/best.rnnw
+```
+
+O número de gerações, mapas e todos os demais parâmetros continuam vindo do `train.json`. Para rodar mais gerações do que o configurado:
+
+```bash
+./build/racing_sim --train --load out_v2/best.rnnw --generations 2000
+```
+
 ### Treinamento com janela (visualização)
 
 Quando `headless: false` no `train.json` (ou sem `--headless`), a janela abre para acompanhar a evolução ao vivo. **Atenção:** o modo janela é serial — os mapas são percorridos um por um em sincronia com o render.
@@ -201,27 +215,6 @@ Quando `headless: false` no `train.json` (ou sem `--headless`), a janela abre pa
 ```
 
 Com múltiplos mapas, a janela alterna automaticamente entre os mapas de treino. Pressione **`T`** para alternar entre **tempo real** (60 Hz) e **turbo** (máxima velocidade).
-
-### Combatendo overfitting (diversidade, anti-memorização e seleção por held-out)
-
-Quando o agente decora os mapas de treino mas falha em pistas novas, há quatro alavancas configuráveis via `train.json` ou CLI:
-
-```bash
-./build/racing_sim --train --headless --population 1000 --generations 1000 \
-  --train-maps maps/map1.json,maps/map4.json,maps/map5.json \
-  --augment mirror,reverse,width:0.85,width:1.15 \   # B) variantes estáticas dos mapas base
-  --procedural-train 8 \                              # A) pistas aleatórias geradas (semeadas)
-  --random-spawn --episodes-per-eval 3 --sensor-noise 0.02 \  # C) anti-memorização por episódio
-  --val-maps maps/map7.json --test-maps maps/map8.json \
-  --select-by-val --val-select-topk 10                # D) best.rnnw escolhido pela validação
-```
-
-- **A — diversidade:** `--procedural-train K` / `--procedural-val K` geram K pistas aleatórias (determinísticas pela seed); `--proc-width-min/--proc-width-max` controlam a faixa de largura.
-- **B — augmentation:** `--augment mirror,reverse,width:<f>` adiciona variantes de cada mapa base ao treino.
-- **C — anti-memorização:** `--random-spawn` (início aleatório na pista; progresso medido relativo ao spawn), `--episodes-per-eval N` (+ `--episode-agg mean|min`), `--sensor-noise <σ>`.
-- **D — seleção por held-out:** `--select-by-val` salva `best.rnnw` pelo **melhor desempenho na validação** (entre os top-K do treino), em vez do fitness de treino. `--test-maps` é **só relatório** (nunca usado na seleção).
-
-Acompanhe a curva de validação/teste ao vivo com `python3 tools/watch_training.py <out_dir>`.
 
 ### Modo janela (explorar / jogar)
 

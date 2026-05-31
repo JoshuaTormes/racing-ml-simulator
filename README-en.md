@@ -191,6 +191,20 @@ Files generated in the directory set by `out`:
 | `held_out_log.csv` | Per-generation validation metrics (requires `--log-csv`) |
 | `test_log.csv` | Test-set metrics (requires `--log-csv` + `test_maps`) |
 
+### Resuming a training run
+
+To continue from a saved checkpoint, use `--load` pointing to the desired `.rnnw`. The simulator uses the champion's weights to seed the initial population and resumes training from there:
+
+```bash
+./build/racing_sim --train --load out_v2/best.rnnw
+```
+
+All parameters (maps, population, generations, etc.) still come from `train.json`. To run more generations than configured:
+
+```bash
+./build/racing_sim --train --load out_v2/best.rnnw --generations 2000
+```
+
 ### Training with window (visualisation)
 
 When `headless: false` in `train.json` (or without `--headless`), a window opens to watch evolution live. **Note:** windowed mode is serial — maps are evaluated one at a time in sync with the renderer.
@@ -200,27 +214,6 @@ When `headless: false` in `train.json` (or without `--headless`), a window opens
 ```
 
 With multiple maps, the window automatically cycles through the training maps. Press **`T`** to toggle between **real-time** (60 Hz) and **turbo** (maximum speed).
-
-### Anti-overfitting (diversity, anti-memorisation, and held-out selection)
-
-When the agent memorises the training maps but fails on new tracks, there are four levers configurable via `train.json` or CLI:
-
-```bash
-./build/racing_sim --train --headless --population 1000 --generations 1000 \
-  --train-maps maps/map1.json,maps/map4.json,maps/map5.json \
-  --augment mirror,reverse,width:0.85,width:1.15 \   # B) static variants of base maps
-  --procedural-train 8 \                              # A) seeded random tracks
-  --random-spawn --episodes-per-eval 3 --sensor-noise 0.02 \  # C) anti-memorisation
-  --val-maps maps/map7.json --test-maps maps/map8.json \
-  --select-by-val --val-select-topk 10                # D) best.rnnw chosen by validation
-```
-
-- **A — diversity:** `--procedural-train K` / `--procedural-val K` generate K seeded random tracks; `--proc-width-min/--proc-width-max` control the width range.
-- **B — augmentation:** `--augment mirror,reverse,width:<f>` adds transformed variants of each base map to the training set.
-- **C — anti-memorisation:** `--random-spawn` (random start; progress measured from spawn), `--episodes-per-eval N` (+ `--episode-agg mean|min`), `--sensor-noise <σ>`.
-- **D — held-out selection:** `--select-by-val` saves `best.rnnw` by **best validation performance** (top-K from training), instead of raw training fitness. `--test-maps` is **report-only** (never used in selection).
-
-Monitor validation/test curves live with `python3 tools/watch_training.py <out_dir>`.
 
 ### Window mode (explore / play)
 
