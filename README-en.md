@@ -168,6 +168,10 @@ Car 0 (yellow) displays **sensor rays**: green = long distance, red = close to e
 ## Command-line Options
 
 ```
+Config file
+  --config <file.json>  Load defaults from a JSON file (CLI flags override)
+  (auto-detect)         train.json in the current directory is loaded automatically
+
 Basic
   --headless              Run without a window
   --map <path>            Path to the map JSON (default: maps/map1_chicanes_infernais.json)
@@ -227,6 +231,56 @@ Watch / Interactive
 ```
 
 **Mode precedence:** `--benchmark` > `--watch` > `--versus` > `--train` > `--load` (without train = watch) > default window mode.
+
+### Config file (`train.json`)
+
+Instead of passing all flags on the command line, put your defaults in `train.json` at the project root. The simulator loads it automatically; CLI flags override any value from the file.
+
+```json
+{
+  "population": 1000,
+  "generations": 1500,
+  "threads": 8,
+  "seed": 42,
+  "headless": true,
+  "out": "out_v2",
+  "log_csv": true,
+
+  "train_maps": [
+    "maps/map1_chicanes_infernais.json",
+    "maps/map4_obstaculos.json",
+    "maps/map5_tecnico_avancado.json"
+  ],
+  "val_maps": ["maps/map7_pesadelo.json"],
+  "test_maps": ["maps/map8_caos_total.json"],
+
+  "fitness_agg": "cvar-rank",
+  "cvar_alpha": 1.0,
+  "curriculum": "none",
+
+  "augment": ["mirror", "reverse"],
+  "procedural_train": 4,
+  "proc_width_min": 60,
+  "proc_width_max": 80,
+
+  "random_spawn": true,
+  "episodes_per_eval": 2,
+
+  "select_by_val": true,
+  "val_select_topk": 10
+}
+```
+
+With this file, a full training run becomes:
+
+```bash
+./build/racing_sim --train                              # all from train.json
+./build/racing_sim --train --load out_v2/best.rnnw      # resume from checkpoint
+./build/racing_sim --train --generations 100            # override one flag
+./build/racing_sim --train --config experiment_b.json   # alternate config
+```
+
+JSON keys use underscores and mirror the CLI flags: `train_maps`, `cvar_alpha`, `random_spawn`, `episodes_per_eval`, etc. Arrays are accepted for `train_maps`, `val_maps`, `test_maps`, `augment`, and `map_weights`.
 
 ---
 
@@ -534,6 +588,7 @@ racing-ml-sim/
 ├── README.md               # Portuguese version
 ├── README-en.md            # This file (English version)
 ├── ARCHITECTURE.md         # Detailed technical documentation
+├── train.json              # Default experiment config (auto-loaded by the simulator)
 ├── assets/
 │   └── DejaVuSans.ttf      # Open-source font for the HUD
 ├── maps/
