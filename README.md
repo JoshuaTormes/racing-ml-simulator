@@ -10,8 +10,8 @@ A motivação central não é o jogo em si, mas a qualidade da arquitetura como 
 
 1. [Requisitos](#requisitos)
 2. [Instalação e Build](#instalação-e-build)
-3. [Modos de Execução](#modos-de-execução)
-4. [Arquivo de configuração (train.json)](#arquivo-de-configuração-trainjson)
+3. [Arquivo de configuração (train.json)](#arquivo-de-configuração-trainjson)
+4. [Modos de Execução](#modos-de-execução)
 5. [Controles (modo janela)](#controles-modo-janela)
 6. [Opções de linha de comando](#opções-de-linha-de-comando)
 7. [Testes](#testes)
@@ -111,25 +111,66 @@ A build baixa `nlohmann/json` automaticamente via `FetchContent` na primeira exe
 
 ---
 
+## Arquivo de configuração (train.json)
+
+`train.json` é o arquivo central de configuração do experimento. Parametrize-o corretamente antes de treinar — o simulador detecta e carrega o arquivo automaticamente ao rodar.
+
+```json
+{
+  "population": 1000,
+  "generations": 1500,
+  "threads": 8,
+  "seed": 42,
+  "headless": true,
+  "out": "out_v2",
+  "log_csv": true,
+
+  "train_maps": [
+    "maps/map1_chicanes_infernais.json",
+    "maps/map4_obstaculos.json",
+    "maps/map5_tecnico_avancado.json"
+  ],
+  "val_maps": ["maps/map7_pesadelo.json"],
+  "test_maps": ["maps/map8_caos_total.json"],
+
+  "fitness_agg": "cvar-rank",
+  "cvar_alpha": 1.0,
+  "curriculum": "none",
+
+  "augment": ["mirror", "reverse"],
+  "procedural_train": 4,
+  "proc_width_min": 60,
+  "proc_width_max": 80,
+
+  "random_spawn": true,
+  "episodes_per_eval": 2,
+
+  "select_by_val": true,
+  "val_select_topk": 10
+}
+```
+
+As chaves do JSON usam underscore e espelham os flags CLI: `train_maps`, `cvar_alpha`, `random_spawn`, `episodes_per_eval`, etc. Arrays são aceitos em `train_maps`, `val_maps`, `test_maps`, `augment` e `map_weights`.
+
+Para usar uma config alternativa (ex: experimentos paralelos):
+
+```bash
+./build/racing_sim --train --config experimento_b.json
+```
+
+---
+
 ## Modos de Execução
 
-### Treinamento (modo principal)
+### Treinamento
 
-Configure tudo em `train.json` e rode:
+Com o `train.json` configurado, rode:
 
 ```bash
 ./build/racing_sim --train
 ```
 
-O simulador detecta e carrega `train.json` automaticamente se o arquivo existir na pasta atual. Flags CLI sobrescrevem qualquer valor do arquivo:
-
-```bash
-./build/racing_sim --train --load out_v2/best.rnnw      # retomar do checkpoint
-./build/racing_sim --train --generations 100             # override pontual
-./build/racing_sim --train --config experimento_b.json  # config alternativa
-```
-
-Com `headless: true` no `train.json` (ou `--headless` na CLI), o treino roda sem janela — muito mais rápido para populações grandes, pois todos os **M mapas × P carros** são avaliados em paralelo num pool de threads.
+Com `headless: true` no `train.json`, o treino roda sem janela — muito mais rápido para populações grandes, pois todos os **M mapas × P carros** são avaliados em paralelo num pool de threads.
 
 Saída no terminal (uma linha por geração):
 
@@ -240,58 +281,6 @@ Mede throughput de simulação e sai.
 
 ---
 
-## Arquivo de configuração (train.json)
-
-Em vez de passar todos os flags na linha de comando, coloque os defaults em `train.json` na raiz do projeto. O simulador detecta e carrega o arquivo automaticamente; flags CLI sobrescrevem qualquer valor do arquivo.
-
-```json
-{
-  "population": 1000,
-  "generations": 1500,
-  "threads": 8,
-  "seed": 42,
-  "headless": true,
-  "out": "out_v2",
-  "log_csv": true,
-
-  "train_maps": [
-    "maps/map1_chicanes_infernais.json",
-    "maps/map4_obstaculos.json",
-    "maps/map5_tecnico_avancado.json"
-  ],
-  "val_maps": ["maps/map7_pesadelo.json"],
-  "test_maps": ["maps/map8_caos_total.json"],
-
-  "fitness_agg": "cvar-rank",
-  "cvar_alpha": 1.0,
-  "curriculum": "none",
-
-  "augment": ["mirror", "reverse"],
-  "procedural_train": 4,
-  "proc_width_min": 60,
-  "proc_width_max": 80,
-
-  "random_spawn": true,
-  "episodes_per_eval": 2,
-
-  "select_by_val": true,
-  "val_select_topk": 10
-}
-```
-
-Com esse arquivo, o treino completo vira:
-
-```bash
-./build/racing_sim --train                              # tudo vem do train.json
-./build/racing_sim --train --load out_v2/best.rnnw      # retomar do checkpoint
-./build/racing_sim --train --generations 100            # override pontual
-./build/racing_sim --train --config experimento_b.json  # config alternativa
-```
-
-As chaves do JSON usam underscore e espelham os flags CLI: `train_maps`, `cvar_alpha`, `random_spawn`, `episodes_per_eval`, etc. Arrays são aceitos em `train_maps`, `val_maps`, `test_maps`, `augment` e `map_weights`.
-
----
-
 ## Controles (modo janela)
 
 | Tecla | Modo | Ação |
@@ -310,6 +299,8 @@ O carro 0 (amarelo) exibe os **raios de sensor**: verde = distância longa, verm
 ---
 
 ## Opções de linha de comando
+
+Referência completa de todos os flags disponíveis. O uso normal é configurar o experimento em `train.json` — os flags abaixo são para overrides pontuais e modos especiais.
 
 ```
 Config file
