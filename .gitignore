@@ -11,4 +11,5 @@ CTestTestfile.cmake
 .claude
 specs
 out/
+out_v2/
 *.rnnw

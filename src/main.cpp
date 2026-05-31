@@ -144,6 +144,8 @@ static void printUsage(const char* argv0) {
         << "  --load <file.rnnw>    With --train: seed population from champion. Without: watch the network\n"
         << "  --watch <file.rnnw>   Watch a saved network drive (no training)\n"
         << "  --versus <file.rnnw>  Human (↑↓←→ / WASD) vs saved network. Yellow = you, green = AI\n"
+        << "                        Use --population N to race against N AIs (default: 1)\n"
+        << "  --versus-noise <s>    Gaussian weight noise per AI copy so they diverge (default: 0.02)\n"
         << "\nMulti-map training & robustness\n"
         << "  --train-maps <a,b,..> Comma-separated list of training maps\n"
         << "  --val-maps <x,y>      Comma-separated validation maps (model selection when --select-by-val)\n"
@@ -232,6 +234,7 @@ int main(int argc, char* argv[]) {
     std::string loadPath;
     std::string watchPath;
     std::string versusPath;
+    float       versusNoise = 0.02f;
     std::string trainMapsArg;
     std::string valMapsArg;
     std::string testMapsArg;
@@ -319,6 +322,7 @@ int main(int argc, char* argv[]) {
             else if (arg == "--load"         && i+1 < argc)  loadPath        = argv[++i];
             else if (arg == "--watch"        && i+1 < argc)  watchPath       = argv[++i];
             else if (arg == "--versus"       && i+1 < argc)  versusPath      = argv[++i];
+            else if (arg == "--versus-noise" && i+1 < argc)  versusNoise     = std::stof(argv[++i]);
             else if (arg == "--train-maps"   && i+1 < argc)  { trainMapsArg = argv[++i]; explicitTrainMaps = true; }
             else if (arg == "--val-maps"     && i+1 < argc)  valMapsArg      = argv[++i];
             else if (arg == "--test-maps"    && i+1 < argc)  testMapsArg     = argv[++i];
@@ -488,14 +492,22 @@ int main(int argc, char* argv[]) {
 #ifndef HEADLESS_ONLY
         std::vector<float> w = loadChampion(path);
         SimConfig vcfg = cfg;
-        vcfg.population = 2;
+        int nAI = std::max(1, cfg.population);
+        vcfg.population = 1 + nAI;
         Game game(vcfg);
         {
-            NeuralNetwork nn(defaultTopology());
-            nn.setWeights(w);
+            std::mt19937 rng(vcfg.seed);
+            std::normal_distribution<float> noise(0.f, versusNoise);
             std::vector<std::unique_ptr<AIController>> ctrls;
             ctrls.push_back(std::make_unique<HumanController>());
-            ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
+            for (int i = 0; i < nAI; ++i) {
+                NeuralNetwork nn(defaultTopology());
+                std::vector<float> wn = w;
+                if (versusNoise > 0.f)
+                    for (float& x : wn) x += noise(rng);
+                nn.setWeights(wn);
+                ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
+            }
             game.setControllers(std::move(ctrls));
         }
         Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
