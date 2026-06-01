@@ -1,7 +1,7 @@
 #pragma once
-#include "Trainer.h"
-#include "Game.h"
-#include "core/TrackGen.h"
+#include "training/Trainer.h"
+#include "sim/Game.h"
+#include "sim/TrackGen.h"
 #include <memory>
 #include <string>
 #include <vector>

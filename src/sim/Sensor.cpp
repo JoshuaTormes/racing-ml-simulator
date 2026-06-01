@@ -1,5 +1,5 @@
-#include "Sensor.h"
-#include "Track.h"
+#include "sim/Sensor.h"
+#include "sim/Track.h"
 #include <cmath>
 
 void Sensor::update(Vec2 pos, float angle, const Track& track) {

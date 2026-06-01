@@ -1,5 +1,5 @@
 #pragma once
-#include "AIController.h"
+#include "control/AIController.h"
 #include "core/Constants.h"
 #include <vector>
 #include <string>

@@ -1,6 +1,6 @@
 #pragma once
 #include "core/Vec2.h"
-#include "Track.h"   // TrackData
+#include "sim/Track.h"   // TrackData
 #include <cstdint>
 
 // Procedural track generation and cheap data augmentation.

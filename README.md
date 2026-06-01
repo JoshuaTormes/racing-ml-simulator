@@ -476,8 +476,8 @@ Carregar um mapa diferente:
 Implemente `AIController` e use a interface `reset()`/`step()`:
 
 ```cpp
-#include "AIController.h"
-#include "Game.h"
+#include "control/AIController.h"
+#include "sim/Game.h"
 
 class MeuAgente : public AIController {
 public:
@@ -540,8 +540,8 @@ Use diretamente a linha de comando — não precisa escrever código:
 Para integrar o loop de treino no seu próprio código:
 
 ```cpp
-#include "Trainers.h"
-#include "Training.h"
+#include "training/Trainers.h"
+#include "training/Training.h"
 
 int main() {
     SimConfig cfg;
@@ -568,9 +568,9 @@ session.endGeneration(); // coleta fitness, salva, evolve
 ### Opção 4 — Neuroevolução manual (GeneticAlgorithm direto)
 
 ```cpp
-#include "Game.h"
-#include "NeuralNetwork.h"
-#include "GeneticAlgorithm.h"
+#include "sim/Game.h"
+#include "control/NeuralNetwork.h"
+#include "training/GeneticAlgorithm.h"
 
 int main() {
     const int POP = 200, GENS = 100;
@@ -603,7 +603,7 @@ int main() {
 Implemente a interface `Trainer` para usar seu próprio algoritmo com o loop geracional existente:
 
 ```cpp
-#include "Trainer.h"
+#include "training/Trainer.h"
 
 class MeuCMAES : public Trainer {
 public:
@@ -708,21 +708,25 @@ racing-ml-sim/
 │   ├── core/
 │   │   ├── Vec2.h          # Vetor 2D matemático, header-only, sem SFML
 │   │   ├── Constants.h     # Todas as constantes da simulação
-│   │   ├── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
-│   │   └── TrackGen.h/.cpp # Geração procedural de pistas e augmentation (mirrorX, reverse, scaleWidth)
-│   ├── AIController.h      # Interface abstrata: decide(Observation) → Action
-│   ├── Track.h / .cpp      # Pista: JSON/in-memory, bordas Catmull-Rom, raycast, progresso por arco
-│   ├── Sensor.h / .cpp     # 13 raios normalizados em leque de 180°
-│   ├── Car.h / .cpp        # Física, observação (26 floats), reward, condições de done
-│   ├── NeuralNetwork.h/.cpp# MLP feedforward + serialização binária RNNW + NNController
-│   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutação
-│   ├── Trainer.h           # Interface Trainer + struct GenerationStats (sem SFML)
-│   ├── Trainers.h / .cpp   # GeneticTrainer, RandomSearchTrainer, HillClimbTrainer + makeTrainer()
-│   ├── Training.h / .cpp   # TrainingSession: loop multi-mapa, curriculum, augmentation, val/test
-│   ├── TrainingMath.h/.cpp # CVaR, rank-CVaR, z-score e agregações de fitness
-│   ├── Game.h / .cpp       # reset/step (RL), tick batch, thread pool
-│   ├── Renderer.h / .cpp   # ÚNICA camada SFML: pista, carros, HUD, gráfico fitness
-│   ├── HumanController.h/.cpp  # Leitura de teclado → Action (depende de SFML)
+│   │   └── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
+│   ├── sim/
+│   │   ├── TrackGen.h/.cpp # Geração procedural de pistas e augmentation (mirrorX, reverse, scaleWidth)
+│   │   ├── Track.h / .cpp  # Pista: JSON/in-memory, bordas Catmull-Rom, raycast, progresso por arco
+│   │   ├── Sensor.h / .cpp # 13 raios normalizados em leque de 180°
+│   │   ├── Car.h / .cpp    # Física, observação (26 floats), reward, condições de done
+│   │   └── Game.h / .cpp   # reset/step (RL), tick batch, thread pool
+│   ├── control/
+│   │   ├── AIController.h          # Interface abstrata: decide(Observation) → Action
+│   │   ├── NeuralNetwork.h/.cpp    # MLP feedforward + serialização binária RNNW + NNController
+│   │   └── HumanController.h/.cpp  # Leitura de teclado → Action (depende de SFML)
+│   ├── training/
+│   │   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutação
+│   │   ├── Trainer.h               # Interface Trainer + struct GenerationStats (sem SFML)
+│   │   ├── Trainers.h / .cpp       # GeneticTrainer, RandomSearchTrainer, HillClimbTrainer + makeTrainer()
+│   │   ├── Training.h / .cpp       # TrainingSession: loop multi-mapa, curriculum, augmentation, val/test
+│   │   └── TrainingMath.h/.cpp     # CVaR, rank-CVaR, z-score e agregações de fitness
+│   ├── render/
+│   │   └── Renderer.h / .cpp   # ÚNICA camada SFML: pista, carros, HUD, gráfico fitness
 │   └── main.cpp            # Parse de args, dispatch para todos os modos
 ├── tools/
 │   ├── check_map_overlap.py  # Detecta auto-sobreposição do ribbon da pista; salva PNG opcional

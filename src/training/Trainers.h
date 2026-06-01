@@ -1,6 +1,6 @@
 #pragma once
-#include "Trainer.h"
-#include "GeneticAlgorithm.h"
+#include "training/Trainer.h"
+#include "training/GeneticAlgorithm.h"
 #include <memory>
 #include <string>
 #include <cstdint>

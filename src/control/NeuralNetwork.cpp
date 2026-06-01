@@ -1,4 +1,4 @@
-#include "NeuralNetwork.h"
+#include "control/NeuralNetwork.h"
 #include <cmath>
 #include <cstring>
 #include <fstream>

@@ -1,5 +1,5 @@
 #pragma once
-#include "Training.h"
+#include "training/Training.h"
 #include <vector>
 
 namespace training_math {

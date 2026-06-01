@@ -1,8 +1,8 @@
 #pragma once
 #include "core/Types.h"
-#include "Track.h"
-#include "Car.h"
-#include "AIController.h"
+#include "sim/Track.h"
+#include "sim/Car.h"
+#include "control/AIController.h"
 #include <vector>
 #include <memory>
 #include <thread>

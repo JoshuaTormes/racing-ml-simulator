@@ -1,8 +1,8 @@
 #pragma once
 #ifndef HEADLESS_ONLY
 
-#include "Game.h"
-#include "Training.h"
+#include "sim/Game.h"
+#include "training/Training.h"
 #include <SFML/Graphics.hpp>
 #include <string>
 

@@ -1,9 +1,9 @@
-#include "Game.h"
-#include "HumanController.h"
-#include "NeuralNetwork.h"
-#include "Renderer.h"
-#include "Trainers.h"
-#include "Training.h"
+#include "sim/Game.h"
+#include "control/HumanController.h"
+#include "control/NeuralNetwork.h"
+#include "render/Renderer.h"
+#include "training/Trainers.h"
+#include "training/Training.h"
 #include <iostream>
 #include <fstream>
 #include <random>

@@ -1,5 +1,5 @@
 #ifndef HEADLESS_ONLY
-#include "HumanController.h"
+#include "control/HumanController.h"
 #include <SFML/Window/Keyboard.hpp>
 
 Action HumanController::decide(const Observation& /*obs*/) {
@@ -24,6 +24,6 @@ Action HumanController::decide(const Observation& /*obs*/) {
 
 #else
 // Stub for headless builds (tests)
-#include "HumanController.h"
+#include "control/HumanController.h"
 Action HumanController::decide(const Observation&) { return {}; }
 #endif

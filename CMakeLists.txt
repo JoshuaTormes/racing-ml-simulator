@@ -28,18 +28,18 @@ target_include_directories(nlohmann_json INTERFACE ${nlohmann_json_SOURCE_DIR}/i
 
 set(SIM_SOURCES
   src/main.cpp
-  src/Track.cpp
-  src/core/TrackGen.cpp
-  src/Car.cpp
-  src/Sensor.cpp
-  src/NeuralNetwork.cpp
-  src/GeneticAlgorithm.cpp
-  src/Trainers.cpp
-  src/Training.cpp
-  src/TrainingMath.cpp
-  src/Game.cpp
-  src/Renderer.cpp
-  src/HumanController.cpp
+  src/sim/Track.cpp
+  src/sim/TrackGen.cpp
+  src/sim/Car.cpp
+  src/sim/Sensor.cpp
+  src/sim/Game.cpp
+  src/control/NeuralNetwork.cpp
+  src/control/HumanController.cpp
+  src/training/GeneticAlgorithm.cpp
+  src/training/Trainers.cpp
+  src/training/Training.cpp
+  src/training/TrainingMath.cpp
+  src/render/Renderer.cpp
 )
 
 add_executable(racing_sim ${SIM_SOURCES})
@@ -48,16 +48,16 @@ target_link_libraries(racing_sim PRIVATE SFML::Graphics SFML::Window SFML::Syste
 
 enable_testing()
 add_executable(racing_tests tests/test_main.cpp
-  src/Track.cpp
-  src/core/TrackGen.cpp
-  src/Car.cpp
-  src/Sensor.cpp
-  src/NeuralNetwork.cpp
-  src/GeneticAlgorithm.cpp
-  src/Trainers.cpp
-  src/Training.cpp
-  src/TrainingMath.cpp
-  src/Game.cpp
+  src/sim/Track.cpp
+  src/sim/TrackGen.cpp
+  src/sim/Car.cpp
+  src/sim/Sensor.cpp
+  src/sim/Game.cpp
+  src/control/NeuralNetwork.cpp
+  src/training/GeneticAlgorithm.cpp
+  src/training/Trainers.cpp
+  src/training/Training.cpp
+  src/training/TrainingMath.cpp
 )
 target_include_directories(racing_tests PRIVATE src)
 target_compile_definitions(racing_tests PRIVATE HEADLESS_ONLY)

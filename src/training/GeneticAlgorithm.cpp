@@ -1,4 +1,4 @@
-#include "GeneticAlgorithm.h"
+#include "training/GeneticAlgorithm.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>

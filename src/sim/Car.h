@@ -1,8 +1,8 @@
 #pragma once
 #include "core/Vec2.h"
 #include "core/Types.h"
-#include "Track.h"
-#include "Sensor.h"
+#include "sim/Track.h"
+#include "sim/Sensor.h"
 
 enum class DoneReason { None, Collision, Timeout, Stall, Completed };
 

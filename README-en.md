@@ -471,8 +471,8 @@ Loading a different map:
 Implement `AIController` and use the `reset()`/`step()` interface:
 
 ```cpp
-#include "AIController.h"
-#include "Game.h"
+#include "control/AIController.h"
+#include "sim/Game.h"
 
 class MyAgent : public AIController {
 public:
@@ -538,8 +538,8 @@ Use the command line directly — no code required:
 To integrate the training loop into your own code:
 
 ```cpp
-#include "Trainers.h"
-#include "Training.h"
+#include "training/Trainers.h"
+#include "training/Training.h"
 
 int main() {
     SimConfig cfg;
@@ -566,9 +566,9 @@ session.endGeneration(); // collects fitness, saves, evolves
 ### Option 4 — Manual neuroevolution (GeneticAlgorithm directly)
 
 ```cpp
-#include "Game.h"
-#include "NeuralNetwork.h"
-#include "GeneticAlgorithm.h"
+#include "sim/Game.h"
+#include "control/NeuralNetwork.h"
+#include "training/GeneticAlgorithm.h"
 
 int main() {
     const int POP = 200, GENS = 100;
@@ -601,7 +601,7 @@ int main() {
 Implement the `Trainer` interface to use your own algorithm with the existing generational loop:
 
 ```cpp
-#include "Trainer.h"
+#include "training/Trainer.h"
 
 class MyCMAES : public Trainer {
 public:
@@ -690,21 +690,25 @@ racing-ml-sim/
 │   ├── core/
 │   │   ├── Vec2.h          # 2D math vector, header-only, no SFML
 │   │   ├── Constants.h     # All simulation constants
-│   │   ├── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
-│   │   └── TrackGen.h/.cpp # Procedural track generation and augmentation (mirrorX, reverse, scaleWidth)
-│   ├── AIController.h      # Abstract interface: decide(Observation) → Action
-│   ├── Track.h / .cpp      # Track: JSON/in-memory, Catmull-Rom edges, raycast, arc-length progress
-│   ├── Sensor.h / .cpp     # 13 normalized rays in a 180° fan
-│   ├── Car.h / .cpp        # Physics, observation (26 floats), reward, done conditions
-│   ├── NeuralNetwork.h/.cpp# Feedforward MLP + binary RNNW serialization + NNController
-│   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutation
-│   ├── Trainer.h           # Trainer interface + GenerationStats struct (no SFML)
-│   ├── Trainers.h / .cpp   # GeneticTrainer, RandomSearchTrainer, HillClimbTrainer + makeTrainer()
-│   ├── Training.h / .cpp   # TrainingSession: multi-map loop, curriculum, augmentation, val/test
-│   ├── TrainingMath.h/.cpp # CVaR, rank-CVaR, z-score and fitness aggregations
-│   ├── Game.h / .cpp       # reset/step (RL), batch tick, thread pool
-│   ├── Renderer.h / .cpp   # ONLY SFML layer: track, cars, HUD, fitness chart
-│   ├── HumanController.h/.cpp  # Keyboard input → Action (depends on SFML)
+│   │   └── Types.h         # Observation, Action, StepResult, RewardConfig, SimConfig
+│   ├── sim/
+│   │   ├── TrackGen.h/.cpp # Procedural track generation and augmentation (mirrorX, reverse, scaleWidth)
+│   │   ├── Track.h / .cpp  # Track: JSON/in-memory, Catmull-Rom edges, raycast, arc-length progress
+│   │   ├── Sensor.h / .cpp # 13 normalized rays in a 180° fan
+│   │   ├── Car.h / .cpp    # Physics, observation (26 floats), reward, done conditions
+│   │   └── Game.h / .cpp   # reset/step (RL), batch tick, thread pool
+│   ├── control/
+│   │   ├── AIController.h          # Abstract interface: decide(Observation) → Action
+│   │   ├── NeuralNetwork.h/.cpp    # Feedforward MLP + binary RNNW serialization + NNController
+│   │   └── HumanController.h/.cpp  # Keyboard input → Action (depends on SFML)
+│   ├── training/
+│   │   ├── GeneticAlgorithm.h/.cpp # GA: init, seedFrom, evolve, crossover, mutation
+│   │   ├── Trainer.h               # Trainer interface + GenerationStats struct (no SFML)
+│   │   ├── Trainers.h / .cpp       # GeneticTrainer, RandomSearchTrainer, HillClimbTrainer + makeTrainer()
+│   │   ├── Training.h / .cpp       # TrainingSession: multi-map loop, curriculum, augmentation, val/test
+│   │   └── TrainingMath.h/.cpp     # CVaR, rank-CVaR, z-score and fitness aggregations
+│   ├── render/
+│   │   └── Renderer.h / .cpp   # ONLY SFML layer: track, cars, HUD, fitness chart
 │   └── main.cpp            # Arg parsing, dispatch for all modes
 ├── tools/
 │   ├── check_map_overlap.py  # Detect track ribbon self-overlap; optional PNG output

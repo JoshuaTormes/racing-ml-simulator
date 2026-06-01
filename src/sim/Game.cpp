@@ -1,5 +1,5 @@
-#include "Game.h"
-#include "NeuralNetwork.h"
+#include "sim/Game.h"
+#include "control/NeuralNetwork.h"
 #include <chrono>
 #include <iostream>
 #include <algorithm>

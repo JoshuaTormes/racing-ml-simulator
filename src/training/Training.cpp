@@ -1,9 +1,9 @@
-#include "Training.h"
-#include "TrainingMath.h"
-#include "NeuralNetwork.h"
-#include "Car.h"
+#include "training/Training.h"
+#include "training/TrainingMath.h"
+#include "control/NeuralNetwork.h"
+#include "sim/Car.h"
 #include "core/Constants.h"
-#include "core/TrackGen.h"
+#include "sim/TrackGen.h"
 #include <stdexcept>
 #include <filesystem>
 #include <iostream>
