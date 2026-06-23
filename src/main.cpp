@@ -18,6 +18,66 @@
 
 using json = nlohmann::json;
 
+// Aggregates all raw CLI/JSON config state for main(). Populated by applyConfig()
+// (from a config file) and then by the CLI parsing loop (which overrides it).
+struct CliOptions {
+    // Basic
+    SimConfig   sim;
+    bool        benchmark   = false;
+    bool        showHelp    = false;
+    bool        explicitMap = false;
+
+    // Training
+    bool        train             = false;
+    std::string algo              = "genetic";
+    int         generations       = 100;
+    std::string outDir            = "out/";
+    std::string loadPath;
+    std::string watchPath;
+    std::string versusPath;
+    float       versusNoise       = 0.02f;
+    bool        logCsv            = false;
+    int         hiddenOverride    = -1;  // -1 = not specified
+    float       episodeTimeoutArg = -1.f;
+
+    // Maps
+    std::string trainMapsArg;
+    bool        explicitTrainMaps = false;
+    std::string valMapsArg;
+    std::string testMapsArg;
+
+    // Fitness aggregation
+    std::string fitnessAggArg   = "cvar-rank";
+    float       cvarAlpha       = 0.5f;
+    std::string mapNormArg      = "zscore";
+    std::string mapWeightsArg;
+    float       progressiveFrac = 1.0f;
+    std::string finetuneMapArg;
+
+    // Curriculum
+    std::string curriculumArg   = "linear";
+    int         currStart       = 2;
+    int         currStep        = 15;
+    std::string currScheduleArg;
+    std::string curriculumPinArg;
+
+    // Anti-overfitting
+    std::string augmentArg;
+    std::string dumpGenMapsDir;
+    int         proceduralTrain  = 0;
+    int         proceduralVal    = 0;
+    float       procWidthMin     = -1.f;  // -1 = use generator default
+    float       procWidthMax     = -1.f;
+    bool        randomSpawn      = false;
+    float       sensorNoise      = 0.f;
+    int         episodesPerEval  = 1;
+    std::string episodeAggArg    = "mean";
+
+    // Model selection
+    bool        selectByVal      = false;
+    int         valSelectTopK    = 1;
+};
+
 static std::vector<std::string> listMaps(const std::string& dir) {
     std::vector<std::string> v;
     std::error_code ec;
@@ -55,75 +115,58 @@ static std::string jsonArrayToComma(const json& v) {
     return out;
 }
 
-// Apply values from a config JSON object to all CLI variables.
+// Apply values from a config JSON object to all CLI options.
 // Called before the CLI parsing loop — subsequent CLI flags overwrite these values.
-static void applyConfig(const json& j,
-                        SimConfig& cfg, bool& train, std::string& algo,
-                        int& generations, std::string& outDir,
-                        std::string& loadPath,
-                        std::string& trainMapsArg, bool& explicitTrainMaps,
-                        std::string& valMapsArg,   std::string& testMapsArg,
-                        std::string& fitnessAggArg, float& cvarAlpha,
-                        std::string& mapNormArg,   std::string& curriculumArg,
-                        int& currStart, int& currStep, std::string& currScheduleArg,
-                        int& hiddenOverride, bool& logCsv, float& episodeTimeoutArg,
-                        std::string& curriculumPinArg, std::string& mapWeightsArg,
-                        float& progressiveFrac, std::string& finetuneMapArg,
-                        bool& selectByVal, int& valSelectTopK,
-                        int& episodesPerEval, bool& randomSpawn, float& sensorNoise,
-                        std::string& episodeAggArg, std::string& augmentArg,
-                        std::string& dumpGenMapsDir,
-                        int& proceduralTrain, int& proceduralVal,
-                        float& procWidthMin, float& procWidthMax) {
+static void applyConfig(const json& j, CliOptions& opt) {
     // Basic
-    if (j.contains("population"))    cfg.population       = j["population"].get<int>();
-    if (j.contains("seed"))          cfg.seed             = j["seed"].get<unsigned>();
-    if (j.contains("threads"))       cfg.threads          = j["threads"].get<int>();
-    if (j.contains("headless"))      cfg.headless         = j["headless"].get<bool>();
-    if (j.contains("map"))           cfg.map              = j["map"].get<std::string>();
+    if (j.contains("population"))    opt.sim.population    = j["population"].get<int>();
+    if (j.contains("seed"))          opt.sim.seed           = j["seed"].get<unsigned>();
+    if (j.contains("threads"))       opt.sim.threads        = j["threads"].get<int>();
+    if (j.contains("headless"))      opt.sim.headless       = j["headless"].get<bool>();
+    if (j.contains("map"))           opt.sim.map            = j["map"].get<std::string>();
     // Training
-    if (j.contains("train"))         train                = j["train"].get<bool>();
-    if (j.contains("algo"))          algo                 = j["algo"].get<std::string>();
-    if (j.contains("generations"))   generations          = j["generations"].get<int>();
-    if (j.contains("out"))           outDir               = j["out"].get<std::string>();
-    if (j.contains("load"))          loadPath             = j["load"].get<std::string>();
-    if (j.contains("log_csv"))       logCsv               = j["log_csv"].get<bool>();
-    if (j.contains("hidden"))        hiddenOverride       = j["hidden"].get<int>();
-    if (j.contains("episode_timeout")) episodeTimeoutArg  = j["episode_timeout"].get<float>();
+    if (j.contains("train"))         opt.train              = j["train"].get<bool>();
+    if (j.contains("algo"))          opt.algo               = j["algo"].get<std::string>();
+    if (j.contains("generations"))   opt.generations        = j["generations"].get<int>();
+    if (j.contains("out"))           opt.outDir             = j["out"].get<std::string>();
+    if (j.contains("load"))          opt.loadPath           = j["load"].get<std::string>();
+    if (j.contains("log_csv"))       opt.logCsv             = j["log_csv"].get<bool>();
+    if (j.contains("hidden"))        opt.hiddenOverride     = j["hidden"].get<int>();
+    if (j.contains("episode_timeout")) opt.episodeTimeoutArg = j["episode_timeout"].get<float>();
     // Maps
     if (j.contains("train_maps")) {
-        trainMapsArg = jsonArrayToComma(j["train_maps"]);
-        if (!trainMapsArg.empty()) explicitTrainMaps = true;
+        opt.trainMapsArg = jsonArrayToComma(j["train_maps"]);
+        if (!opt.trainMapsArg.empty()) opt.explicitTrainMaps = true;
     }
-    if (j.contains("val_maps"))      valMapsArg           = jsonArrayToComma(j["val_maps"]);
-    if (j.contains("test_maps"))     testMapsArg          = jsonArrayToComma(j["test_maps"]);
+    if (j.contains("val_maps"))      opt.valMapsArg         = jsonArrayToComma(j["val_maps"]);
+    if (j.contains("test_maps"))     opt.testMapsArg        = jsonArrayToComma(j["test_maps"]);
     // Fitness aggregation
-    if (j.contains("fitness_agg"))   fitnessAggArg        = j["fitness_agg"].get<std::string>();
-    if (j.contains("cvar_alpha"))    cvarAlpha            = j["cvar_alpha"].get<float>();
-    if (j.contains("map_norm"))      mapNormArg           = j["map_norm"].get<std::string>();
-    if (j.contains("map_weights"))   mapWeightsArg        = jsonArrayToComma(j["map_weights"]);
-    if (j.contains("progressive_frac")) progressiveFrac   = j["progressive_frac"].get<float>();
-    if (j.contains("finetune_map"))  finetuneMapArg       = j["finetune_map"].get<std::string>();
+    if (j.contains("fitness_agg"))   opt.fitnessAggArg      = j["fitness_agg"].get<std::string>();
+    if (j.contains("cvar_alpha"))    opt.cvarAlpha          = j["cvar_alpha"].get<float>();
+    if (j.contains("map_norm"))      opt.mapNormArg         = j["map_norm"].get<std::string>();
+    if (j.contains("map_weights"))   opt.mapWeightsArg      = jsonArrayToComma(j["map_weights"]);
+    if (j.contains("progressive_frac")) opt.progressiveFrac = j["progressive_frac"].get<float>();
+    if (j.contains("finetune_map"))  opt.finetuneMapArg     = j["finetune_map"].get<std::string>();
     // Curriculum
-    if (j.contains("curriculum"))    curriculumArg        = j["curriculum"].get<std::string>();
-    if (j.contains("curriculum_start")) currStart         = j["curriculum_start"].get<int>();
-    if (j.contains("curriculum_step"))  currStep          = j["curriculum_step"].get<int>();
-    if (j.contains("curriculum_schedule")) currScheduleArg = jsonArrayToComma(j["curriculum_schedule"]);
-    if (j.contains("curriculum_pin")) curriculumPinArg    = jsonArrayToComma(j["curriculum_pin"]);
+    if (j.contains("curriculum"))    opt.curriculumArg      = j["curriculum"].get<std::string>();
+    if (j.contains("curriculum_start")) opt.currStart       = j["curriculum_start"].get<int>();
+    if (j.contains("curriculum_step"))  opt.currStep        = j["curriculum_step"].get<int>();
+    if (j.contains("curriculum_schedule")) opt.currScheduleArg = jsonArrayToComma(j["curriculum_schedule"]);
+    if (j.contains("curriculum_pin")) opt.curriculumPinArg  = jsonArrayToComma(j["curriculum_pin"]);
     // Anti-overfitting
-    if (j.contains("augment"))       augmentArg           = jsonArrayToComma(j["augment"]);
-    if (j.contains("dump_gen_maps")) dumpGenMapsDir       = j["dump_gen_maps"].get<std::string>();
-    if (j.contains("procedural_train")) proceduralTrain   = j["procedural_train"].get<int>();
-    if (j.contains("procedural_val"))   proceduralVal     = j["procedural_val"].get<int>();
-    if (j.contains("proc_width_min"))   procWidthMin      = j["proc_width_min"].get<float>();
-    if (j.contains("proc_width_max"))   procWidthMax      = j["proc_width_max"].get<float>();
-    if (j.contains("random_spawn"))  randomSpawn          = j["random_spawn"].get<bool>();
-    if (j.contains("sensor_noise"))  sensorNoise          = j["sensor_noise"].get<float>();
-    if (j.contains("episodes_per_eval")) episodesPerEval  = j["episodes_per_eval"].get<int>();
-    if (j.contains("episode_agg"))   episodeAggArg        = j["episode_agg"].get<std::string>();
+    if (j.contains("augment"))       opt.augmentArg         = jsonArrayToComma(j["augment"]);
+    if (j.contains("dump_gen_maps")) opt.dumpGenMapsDir     = j["dump_gen_maps"].get<std::string>();
+    if (j.contains("procedural_train")) opt.proceduralTrain = j["procedural_train"].get<int>();
+    if (j.contains("procedural_val"))   opt.proceduralVal   = j["procedural_val"].get<int>();
+    if (j.contains("proc_width_min"))   opt.procWidthMin    = j["proc_width_min"].get<float>();
+    if (j.contains("proc_width_max"))   opt.procWidthMax    = j["proc_width_max"].get<float>();
+    if (j.contains("random_spawn"))  opt.randomSpawn        = j["random_spawn"].get<bool>();
+    if (j.contains("sensor_noise"))  opt.sensorNoise        = j["sensor_noise"].get<float>();
+    if (j.contains("episodes_per_eval")) opt.episodesPerEval = j["episodes_per_eval"].get<int>();
+    if (j.contains("episode_agg"))   opt.episodeAggArg      = j["episode_agg"].get<std::string>();
     // Model selection
-    if (j.contains("select_by_val")) selectByVal          = j["select_by_val"].get<bool>();
-    if (j.contains("val_select_topk")) valSelectTopK      = j["val_select_topk"].get<int>();
+    if (j.contains("select_by_val")) opt.selectByVal        = j["select_by_val"].get<bool>();
+    if (j.contains("val_select_topk")) opt.valSelectTopK    = j["val_select_topk"].get<int>();
 }
 
 static void printUsage(const char* argv0) {
@@ -224,50 +267,7 @@ static CurriculumMode parseCurriculum(const std::string& s) {
 }
 
 int main(int argc, char* argv[]) {
-    SimConfig cfg;
-    bool benchmark    = false;
-    bool train        = false;
-    bool showHelp     = false;
-    std::string algo        = "genetic";
-    int         generations = 100;
-    std::string outDir      = "out/";
-    std::string loadPath;
-    std::string watchPath;
-    std::string versusPath;
-    float       versusNoise = 0.02f;
-    std::string trainMapsArg;
-    std::string valMapsArg;
-    std::string testMapsArg;
-    bool explicitMap        = false;
-    bool explicitTrainMaps  = false;
-
-    // Multi-map robustness flags
-    std::string fitnessAggArg   = "cvar-rank";
-    float       cvarAlpha       = 0.5f;
-    std::string mapNormArg      = "zscore";
-    std::string curriculumArg   = "linear";
-    int         currStart       = 2;
-    int         currStep        = 15;
-    std::string currScheduleArg;
-    int         hiddenOverride  = -1;  // -1 = not specified
-    bool        logCsv          = false;
-    float       episodeTimeoutArg = -1.f;
-    std::string curriculumPinArg;
-    std::string mapWeightsArg;
-    float       progressiveFrac   = 1.0f;
-    std::string finetuneMapArg;
-    bool        selectByVal       = false;
-    int         valSelectTopK     = 1;
-    int         episodesPerEval   = 1;
-    bool        randomSpawn       = false;
-    float       sensorNoise       = 0.f;
-    std::string episodeAggArg     = "mean";
-    std::string augmentArg;
-    std::string dumpGenMapsDir;
-    int         proceduralTrain   = 0;
-    int         proceduralVal     = 0;
-    float       procWidthMin      = -1.f;  // -1 = use generator default
-    float       procWidthMax      = -1.f;
+    CliOptions opt;
 
     // ---- Config file: auto-detect train.json or use --config <file> -----------
     {
@@ -289,15 +289,7 @@ int main(int argc, char* argv[]) {
             }
             try {
                 json j = json::parse(f);
-                applyConfig(j, cfg, train, algo, generations, outDir, loadPath,
-                            trainMapsArg, explicitTrainMaps, valMapsArg, testMapsArg,
-                            fitnessAggArg, cvarAlpha, mapNormArg, curriculumArg,
-                            currStart, currStep, currScheduleArg,
-                            hiddenOverride, logCsv, episodeTimeoutArg,
-                            curriculumPinArg, mapWeightsArg, progressiveFrac, finetuneMapArg,
-                            selectByVal, valSelectTopK, episodesPerEval, randomSpawn,
-                            sensorNoise, episodeAggArg, augmentArg, dumpGenMapsDir,
-                            proceduralTrain, proceduralVal, procWidthMin, procWidthMax);
+                applyConfig(j, opt);
                 std::cerr << "[config] Loaded " << configPath << "\n";
             } catch (const std::exception& e) {
                 std::cerr << "Error parsing config file " << configPath << ": " << e.what() << "\n";
@@ -309,76 +301,76 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         try {
-            if      (arg == "--headless")                    cfg.headless    = true;
-            else if (arg == "--benchmark")                   { benchmark = true; cfg.headless = true; }
-            else if (arg == "--train")                       train           = true;
-            else if (arg == "--map"          && i+1 < argc)  { cfg.map = argv[++i]; explicitMap = true; }
-            else if (arg == "--population"   && i+1 < argc)  cfg.population  = std::stoi(argv[++i]);
-            else if (arg == "--seed"         && i+1 < argc)  cfg.seed        = (unsigned)std::stoul(argv[++i]);
-            else if (arg == "--threads"      && i+1 < argc)  cfg.threads     = std::stoi(argv[++i]);
-            else if (arg == "--algo"         && i+1 < argc)  algo            = argv[++i];
-            else if (arg == "--generations"  && i+1 < argc)  generations     = std::stoi(argv[++i]);
-            else if (arg == "--out"          && i+1 < argc)  outDir          = argv[++i];
-            else if (arg == "--load"         && i+1 < argc)  loadPath        = argv[++i];
-            else if (arg == "--watch"        && i+1 < argc)  watchPath       = argv[++i];
-            else if (arg == "--versus"       && i+1 < argc)  versusPath      = argv[++i];
-            else if (arg == "--versus-noise" && i+1 < argc)  versusNoise     = std::stof(argv[++i]);
-            else if (arg == "--train-maps"   && i+1 < argc)  { trainMapsArg = argv[++i]; explicitTrainMaps = true; }
-            else if (arg == "--val-maps"     && i+1 < argc)  valMapsArg      = argv[++i];
-            else if (arg == "--test-maps"    && i+1 < argc)  testMapsArg     = argv[++i];
-            else if (arg == "--select-by-val")               selectByVal     = true;
-            else if (arg == "--val-select-topk" && i+1 < argc) valSelectTopK = std::stoi(argv[++i]);
-            else if (arg == "--random-spawn")                randomSpawn     = true;
-            else if (arg == "--sensor-noise"     && i+1 < argc) sensorNoise   = std::stof(argv[++i]);
-            else if (arg == "--episodes-per-eval" && i+1 < argc) episodesPerEval = std::stoi(argv[++i]);
-            else if (arg == "--episode-agg"      && i+1 < argc) episodeAggArg  = argv[++i];
-            else if (arg == "--augment"          && i+1 < argc) augmentArg      = argv[++i];
-            else if (arg == "--dump-gen-maps"    && i+1 < argc) dumpGenMapsDir  = argv[++i];
-            else if (arg == "--procedural-train" && i+1 < argc) proceduralTrain = std::stoi(argv[++i]);
-            else if (arg == "--procedural-val"   && i+1 < argc) proceduralVal   = std::stoi(argv[++i]);
-            else if (arg == "--proc-width-min"   && i+1 < argc) procWidthMin    = std::stof(argv[++i]);
-            else if (arg == "--proc-width-max"   && i+1 < argc) procWidthMax    = std::stof(argv[++i]);
-            else if (arg == "--fitness-agg"  && i+1 < argc)  fitnessAggArg   = argv[++i];
-            else if (arg == "--cvar-alpha"   && i+1 < argc)  cvarAlpha       = std::stof(argv[++i]);
-            else if (arg == "--map-norm"     && i+1 < argc)  mapNormArg      = argv[++i];
-            else if (arg == "--curriculum"   && i+1 < argc)  curriculumArg   = argv[++i];
-            else if (arg == "--curriculum-start" && i+1 < argc)  currStart   = std::stoi(argv[++i]);
-            else if (arg == "--curriculum-step"  && i+1 < argc)  currStep    = std::stoi(argv[++i]);
-            else if (arg == "--curriculum-schedule" && i+1 < argc) currScheduleArg = argv[++i];
-            else if (arg == "--hidden"       && i+1 < argc)  hiddenOverride  = std::stoi(argv[++i]);
-            else if (arg == "--log-csv")                      logCsv         = true;
-            else if (arg == "--episode-timeout"  && i+1 < argc) episodeTimeoutArg = std::stof(argv[++i]);
-            else if (arg == "--curriculum-pin"   && i+1 < argc) curriculumPinArg  = argv[++i];
-            else if (arg == "--map-weights"      && i+1 < argc) mapWeightsArg     = argv[++i];
-            else if (arg == "--progressive-frac" && i+1 < argc) progressiveFrac   = std::stof(argv[++i]);
-            else if (arg == "--finetune-map"     && i+1 < argc) finetuneMapArg    = argv[++i];
+            if      (arg == "--headless")                    opt.sim.headless = true;
+            else if (arg == "--benchmark")                   { opt.benchmark = true; opt.sim.headless = true; }
+            else if (arg == "--train")                       opt.train           = true;
+            else if (arg == "--map"          && i+1 < argc)  { opt.sim.map = argv[++i]; opt.explicitMap = true; }
+            else if (arg == "--population"   && i+1 < argc)  opt.sim.population  = std::stoi(argv[++i]);
+            else if (arg == "--seed"         && i+1 < argc)  opt.sim.seed        = (unsigned)std::stoul(argv[++i]);
+            else if (arg == "--threads"      && i+1 < argc)  opt.sim.threads     = std::stoi(argv[++i]);
+            else if (arg == "--algo"         && i+1 < argc)  opt.algo            = argv[++i];
+            else if (arg == "--generations"  && i+1 < argc)  opt.generations     = std::stoi(argv[++i]);
+            else if (arg == "--out"          && i+1 < argc)  opt.outDir          = argv[++i];
+            else if (arg == "--load"         && i+1 < argc)  opt.loadPath        = argv[++i];
+            else if (arg == "--watch"        && i+1 < argc)  opt.watchPath       = argv[++i];
+            else if (arg == "--versus"       && i+1 < argc)  opt.versusPath      = argv[++i];
+            else if (arg == "--versus-noise" && i+1 < argc)  opt.versusNoise     = std::stof(argv[++i]);
+            else if (arg == "--train-maps"   && i+1 < argc)  { opt.trainMapsArg = argv[++i]; opt.explicitTrainMaps = true; }
+            else if (arg == "--val-maps"     && i+1 < argc)  opt.valMapsArg      = argv[++i];
+            else if (arg == "--test-maps"    && i+1 < argc)  opt.testMapsArg     = argv[++i];
+            else if (arg == "--select-by-val")               opt.selectByVal     = true;
+            else if (arg == "--val-select-topk" && i+1 < argc) opt.valSelectTopK = std::stoi(argv[++i]);
+            else if (arg == "--random-spawn")                opt.randomSpawn     = true;
+            else if (arg == "--sensor-noise"     && i+1 < argc) opt.sensorNoise   = std::stof(argv[++i]);
+            else if (arg == "--episodes-per-eval" && i+1 < argc) opt.episodesPerEval = std::stoi(argv[++i]);
+            else if (arg == "--episode-agg"      && i+1 < argc) opt.episodeAggArg  = argv[++i];
+            else if (arg == "--augment"          && i+1 < argc) opt.augmentArg      = argv[++i];
+            else if (arg == "--dump-gen-maps"    && i+1 < argc) opt.dumpGenMapsDir  = argv[++i];
+            else if (arg == "--procedural-train" && i+1 < argc) opt.proceduralTrain = std::stoi(argv[++i]);
+            else if (arg == "--procedural-val"   && i+1 < argc) opt.proceduralVal   = std::stoi(argv[++i]);
+            else if (arg == "--proc-width-min"   && i+1 < argc) opt.procWidthMin    = std::stof(argv[++i]);
+            else if (arg == "--proc-width-max"   && i+1 < argc) opt.procWidthMax    = std::stof(argv[++i]);
+            else if (arg == "--fitness-agg"  && i+1 < argc)  opt.fitnessAggArg   = argv[++i];
+            else if (arg == "--cvar-alpha"   && i+1 < argc)  opt.cvarAlpha       = std::stof(argv[++i]);
+            else if (arg == "--map-norm"     && i+1 < argc)  opt.mapNormArg      = argv[++i];
+            else if (arg == "--curriculum"   && i+1 < argc)  opt.curriculumArg   = argv[++i];
+            else if (arg == "--curriculum-start" && i+1 < argc)  opt.currStart   = std::stoi(argv[++i]);
+            else if (arg == "--curriculum-step"  && i+1 < argc)  opt.currStep    = std::stoi(argv[++i]);
+            else if (arg == "--curriculum-schedule" && i+1 < argc) opt.currScheduleArg = argv[++i];
+            else if (arg == "--hidden"       && i+1 < argc)  opt.hiddenOverride  = std::stoi(argv[++i]);
+            else if (arg == "--log-csv")                      opt.logCsv         = true;
+            else if (arg == "--episode-timeout"  && i+1 < argc) opt.episodeTimeoutArg = std::stof(argv[++i]);
+            else if (arg == "--curriculum-pin"   && i+1 < argc) opt.curriculumPinArg  = argv[++i];
+            else if (arg == "--map-weights"      && i+1 < argc) opt.mapWeightsArg     = argv[++i];
+            else if (arg == "--progressive-frac" && i+1 < argc) opt.progressiveFrac   = std::stof(argv[++i]);
+            else if (arg == "--finetune-map"     && i+1 < argc) opt.finetuneMapArg    = argv[++i];
             else if (arg == "--config"       && i+1 < argc) ++i; // already consumed above
-            else if (arg == "--help" || arg == "-h")             showHelp          = true;
-            else { std::cerr << "Unknown option: " << arg << "\n"; showHelp = true; }
+            else if (arg == "--help" || arg == "-h")             opt.showHelp          = true;
+            else { std::cerr << "Unknown option: " << arg << "\n"; opt.showHelp = true; }
         } catch (const std::exception& e) {
             std::cerr << "Error parsing " << arg << ": " << e.what() << "\n";
             return 1;
         }
     }
 
-    if (showHelp) { printUsage(argv[0]); return 0; }
+    if (opt.showHelp) { printUsage(argv[0]); return 0; }
 
     // ---- Validate and parse multi-map config --------------------------------
     FitnessAgg   fitnessAgg = FitnessAgg::CVaRRank;
-    MapNormMode  mapNorm    = MapNormMode::ZScore;
+MapNormMode  mapNorm    = MapNormMode::ZScore;
     CurriculumMode currMode = CurriculumMode::Linear;
 
     try {
-        fitnessAgg = parseAgg(fitnessAggArg);
-        mapNorm    = parseNorm(mapNormArg);
-        currMode   = parseCurriculum(curriculumArg);
+        fitnessAgg = parseAgg(opt.fitnessAggArg);
+        mapNorm    = parseNorm(opt.mapNormArg);
+        currMode   = parseCurriculum(opt.curriculumArg);
     } catch (const std::exception& e) {
         std::cerr << e.what() << "\n";
         return 1;
     }
 
-    if (cvarAlpha <= 0.f || cvarAlpha > 1.f) {
-        std::cerr << "--cvar-alpha must be in (0, 1], got " << cvarAlpha << "\n";
+    if (opt.cvarAlpha <= 0.f || opt.cvarAlpha > 1.f) {
+        std::cerr << "--cvar-alpha must be in (0, 1], got " << opt.cvarAlpha << "\n";
         return 1;
     }
 
@@ -388,50 +380,50 @@ int main(int argc, char* argv[]) {
 
     // ---- Resolve --hidden and --load ----------------------------------------
     // Must be done before any NeuralNetwork construction.
-    if (!loadPath.empty()) {
+    if (!opt.loadPath.empty()) {
         // Read topology from saved file to detect hidden size
         std::vector<int> topo;
         try {
-            topo = readTopologyFromFile(loadPath);
+            topo = readTopologyFromFile(opt.loadPath);
         } catch (const std::exception& e) {
-            std::cerr << "Cannot read " << loadPath << ": " << e.what() << "\n";
+            std::cerr << "Cannot read " << opt.loadPath << ": " << e.what() << "\n";
             return 1;
         }
         int fileH = (topo.size() >= 3) ? topo[1] : -1;
 
-        if (hiddenOverride >= 0) {
-            if (hiddenOverride != fileH) {
-                std::cerr << "--hidden " << hiddenOverride
+        if (opt.hiddenOverride >= 0) {
+            if (opt.hiddenOverride != fileH) {
+                std::cerr << "--hidden " << opt.hiddenOverride
                           << " conflicts with champion hidden size " << fileH
-                          << " in " << loadPath << "\n";
+                          << " in " << opt.loadPath << "\n";
                 return 1;
             }
-            setHiddenSize(hiddenOverride);
+            setHiddenSize(opt.hiddenOverride);
         } else {
             // Auto-detect from file topology
             if (fileH <= 0) {
-                std::cerr << "Cannot infer hidden size from " << loadPath
+                std::cerr << "Cannot infer hidden size from " << opt.loadPath
                           << " (topology has " << topo.size() << " layers)\n";
                 return 1;
             }
             setHiddenSize(fileH);
         }
-    } else if (hiddenOverride >= 0) {
-        setHiddenSize(hiddenOverride);
+    } else if (opt.hiddenOverride >= 0) {
+        setHiddenSize(opt.hiddenOverride);
     }
 
     // ---- Apply --episode-timeout ----
-    if (episodeTimeoutArg > 0.f) {
-        if (episodeTimeoutArg > 600.f) {
-            std::cerr << "--episode-timeout must be in (0, 600], got " << episodeTimeoutArg << "\n";
+    if (opt.episodeTimeoutArg > 0.f) {
+        if (opt.episodeTimeoutArg > 600.f) {
+            std::cerr << "--episode-timeout must be in (0, 600], got " << opt.episodeTimeoutArg << "\n";
             return 1;
         }
-        setEpisodeTimeout(episodeTimeoutArg);
+        setEpisodeTimeout(opt.episodeTimeoutArg);
     }
 
     // ---- benchmark ----
-    if (benchmark) {
-        Game::runBenchmark(cfg);
+    if (opt.benchmark) {
+        Game::runBenchmark(opt.sim);
         return 0;
     }
 
@@ -439,7 +431,7 @@ int main(int argc, char* argv[]) {
     auto runWatch = [&](const std::string& path) {
 #ifndef HEADLESS_ONLY
         std::vector<float> w = loadChampion(path);
-        SimConfig wcfg = cfg;
+        SimConfig wcfg = opt.sim;
         wcfg.population = 1;
         Game game(wcfg);
         {
@@ -491,19 +483,19 @@ int main(int argc, char* argv[]) {
     auto runVersus = [&](const std::string& path) {
 #ifndef HEADLESS_ONLY
         std::vector<float> w = loadChampion(path);
-        SimConfig vcfg = cfg;
-        int nAI = std::max(1, cfg.population);
+        SimConfig vcfg = opt.sim;
+        int nAI = std::max(1, opt.sim.population);
         vcfg.population = 1 + nAI;
         Game game(vcfg);
         {
             std::mt19937 rng(vcfg.seed);
-            std::normal_distribution<float> noise(0.f, versusNoise);
+            std::normal_distribution<float> noise(0.f, opt.versusNoise);
             std::vector<std::unique_ptr<AIController>> ctrls;
             ctrls.push_back(std::make_unique<HumanController>());
             for (int i = 0; i < nAI; ++i) {
                 NeuralNetwork nn(defaultTopology());
                 std::vector<float> wn = w;
-                if (versusNoise > 0.f)
+                if (opt.versusNoise > 0.f)
                     for (float& x : wn) x += noise(rng);
                 nn.setWeights(wn);
                 ctrls.push_back(std::make_unique<NeuralNetworkController>(std::move(nn)));
@@ -548,24 +540,24 @@ int main(int argc, char* argv[]) {
 #endif
     };
 
-    if (!watchPath.empty()) { runWatch(watchPath); return 0; }
-    if (!versusPath.empty()) { runVersus(versusPath); return 0; }
-    if (!loadPath.empty() && !train) { runWatch(loadPath); return 0; }
+    if (!opt.watchPath.empty()) { runWatch(opt.watchPath); return 0; }
+    if (!opt.versusPath.empty()) { runVersus(opt.versusPath); return 0; }
+    if (!opt.loadPath.empty() && !opt.train) { runWatch(opt.loadPath); return 0; }
 
     // ---- training ----
-    if (train) {
+    if (opt.train) {
         // ----- Resolve train/val map lists -----------------------------------
         std::vector<std::string> trainMaps;
         std::vector<std::string> valMaps;
 
-        if (explicitTrainMaps) {
-            trainMaps = splitComma(trainMapsArg);
-            if (!valMapsArg.empty())
-                valMaps = splitComma(valMapsArg);
-        } else if (explicitMap) {
-            trainMaps = { cfg.map };
-            if (!valMapsArg.empty())
-                valMaps = splitComma(valMapsArg);
+        if (opt.explicitTrainMaps) {
+            trainMaps = splitComma(opt.trainMapsArg);
+            if (!opt.valMapsArg.empty())
+                valMaps = splitComma(opt.valMapsArg);
+        } else if (opt.explicitMap) {
+            trainMaps = { opt.sim.map };
+            if (!opt.valMapsArg.empty())
+                valMaps = splitComma(opt.valMapsArg);
         } else {
             auto allMaps = listMaps("maps");
             if (allMaps.size() >= 3) {
@@ -576,8 +568,8 @@ int main(int argc, char* argv[]) {
             } else {
                 trainMaps = allMaps;
             }
-            if (!valMapsArg.empty())
-                valMaps = splitComma(valMapsArg);
+            if (!opt.valMapsArg.empty())
+                valMaps = splitComma(opt.valMapsArg);
         }
 
         if (trainMaps.empty()) {
@@ -587,21 +579,21 @@ int main(int argc, char* argv[]) {
 
         // Held-out test set: report-only, never used in selection.
         std::vector<std::string> testMaps;
-        if (!testMapsArg.empty())
-            testMaps = splitComma(testMapsArg);
+        if (!opt.testMapsArg.empty())
+            testMaps = splitComma(opt.testMapsArg);
 
         // ----- Validate curriculum-schedule ----------------------------------
         CurriculumConfig currCfg;
         currCfg.mode  = currMode;
-        currCfg.start = currStart;
-        currCfg.step  = currStep;
+        currCfg.start = opt.currStart;
+        currCfg.step  = opt.currStep;
 
         if (currMode == CurriculumMode::Explicit) {
-            if (currScheduleArg.empty()) {
+            if (opt.currScheduleArg.empty()) {
                 std::cerr << "--curriculum explicit requires --curriculum-schedule <g1,g2,...>\n";
                 return 1;
             }
-            auto tokens = splitComma(currScheduleArg);
+            auto tokens = splitComma(opt.currScheduleArg);
             int expected = (int)trainMaps.size() - 1;
             if ((int)tokens.size() != expected) {
                 std::cerr << "--curriculum-schedule must have exactly M-1=" << expected
@@ -614,8 +606,8 @@ int main(int argc, char* argv[]) {
         }
 
         // ----- --curriculum-pin: parse and validate -------------------------
-        if (!curriculumPinArg.empty()) {
-            auto tokens = splitComma(curriculumPinArg);
+        if (!opt.curriculumPinArg.empty()) {
+            auto tokens = splitComma(opt.curriculumPinArg);
             for (const auto& tok : tokens) {
                 int idx = std::stoi(tok);
                 if (idx < 0 || idx >= (int)trainMaps.size()) {
@@ -628,61 +620,61 @@ int main(int argc, char* argv[]) {
         }
 
         // ----- --progressive-frac validation --------------------------------
-        if (progressiveFrac <= 0.f || progressiveFrac > 1.f) {
-            std::cerr << "--progressive-frac must be in (0, 1], got " << progressiveFrac << "\n";
+        if (opt.progressiveFrac <= 0.f || opt.progressiveFrac > 1.f) {
+            std::cerr << "--progressive-frac must be in (0, 1], got " << opt.progressiveFrac << "\n";
             return 1;
         }
 
         // ----- Build MultiMapConfig ------------------------------------------
         MultiMapConfig mmCfg;
         mmCfg.fitnessAgg      = fitnessAgg;
-        mmCfg.cvarAlpha       = cvarAlpha;
+        mmCfg.cvarAlpha       = opt.cvarAlpha;
         mmCfg.mapNorm         = mapNorm;
         mmCfg.curriculum      = currCfg;
-        mmCfg.progressiveFrac = progressiveFrac;
-        mmCfg.selectByVal     = selectByVal;
-        mmCfg.valSelectTopK   = valSelectTopK;
-        mmCfg.episodesPerEval = episodesPerEval;
-        mmCfg.randomSpawn     = randomSpawn;
-        mmCfg.sensorNoise     = sensorNoise;
-        mmCfg.episodeAgg      = (episodeAggArg == "min") ? EpisodeAgg::Min : EpisodeAgg::Mean;
+        mmCfg.progressiveFrac = opt.progressiveFrac;
+        mmCfg.selectByVal     = opt.selectByVal;
+        mmCfg.valSelectTopK   = opt.valSelectTopK;
+        mmCfg.episodesPerEval = opt.episodesPerEval;
+        mmCfg.randomSpawn     = opt.randomSpawn;
+        mmCfg.sensorNoise     = opt.sensorNoise;
+        mmCfg.episodeAgg      = (opt.episodeAggArg == "min") ? EpisodeAgg::Min : EpisodeAgg::Mean;
 
-        if (episodeAggArg != "mean" && episodeAggArg != "min") {
-            std::cerr << "--episode-agg must be 'mean' or 'min', got " << episodeAggArg << "\n";
+        if (opt.episodeAggArg != "mean" && opt.episodeAggArg != "min") {
+            std::cerr << "--episode-agg must be 'mean' or 'min', got " << opt.episodeAggArg << "\n";
             return 1;
         }
-        if (episodesPerEval < 1) {
-            std::cerr << "--episodes-per-eval must be >= 1, got " << episodesPerEval << "\n";
+        if (opt.episodesPerEval < 1) {
+            std::cerr << "--episodes-per-eval must be >= 1, got " << opt.episodesPerEval << "\n";
             return 1;
         }
-        if (sensorNoise < 0.f) {
-            std::cerr << "--sensor-noise must be >= 0, got " << sensorNoise << "\n";
+        if (opt.sensorNoise < 0.f) {
+            std::cerr << "--sensor-noise must be >= 0, got " << opt.sensorNoise << "\n";
             return 1;
         }
 
         // --dump-gen-maps: create dir and pass to mmCfg
-        if (!dumpGenMapsDir.empty()) {
-            std::filesystem::create_directories(dumpGenMapsDir);
-            mmCfg.dumpGenMaps = dumpGenMapsDir;
+        if (!opt.dumpGenMapsDir.empty()) {
+            std::filesystem::create_directories(opt.dumpGenMapsDir);
+            mmCfg.dumpGenMaps = opt.dumpGenMapsDir;
         }
 
         // --procedural-train/val + optional width overrides
-        mmCfg.proceduralTrain = proceduralTrain;
-        mmCfg.proceduralVal   = proceduralVal;
-        if (proceduralTrain < 0 || proceduralVal < 0) {
+        mmCfg.proceduralTrain = opt.proceduralTrain;
+        mmCfg.proceduralVal   = opt.proceduralVal;
+        if (opt.proceduralTrain < 0 || opt.proceduralVal < 0) {
             std::cerr << "--procedural-train/--procedural-val must be >= 0\n";
             return 1;
         }
-        if (procWidthMin > 0.f) mmCfg.genParams.widthMin = procWidthMin;
-        if (procWidthMax > 0.f) mmCfg.genParams.widthMax = procWidthMax;
+        if (opt.procWidthMin > 0.f) mmCfg.genParams.widthMin = opt.procWidthMin;
+        if (opt.procWidthMax > 0.f) mmCfg.genParams.widthMax = opt.procWidthMax;
         if (mmCfg.genParams.widthMin > mmCfg.genParams.widthMax) {
             std::cerr << "--proc-width-min must be <= --proc-width-max\n";
             return 1;
         }
 
         // --augment: validate tokens (mirror | reverse | width:<factor>)
-        if (!augmentArg.empty()) {
-            for (const auto& tok : splitComma(augmentArg)) {
+        if (!opt.augmentArg.empty()) {
+            for (const auto& tok : splitComma(opt.augmentArg)) {
                 if (tok == "mirror" || tok == "reverse") {
                     mmCfg.augment.push_back(tok);
                 } else if (tok.rfind("width:", 0) == 0) {
@@ -700,18 +692,18 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (valSelectTopK < 1) {
-            std::cerr << "--val-select-topk must be >= 1, got " << valSelectTopK << "\n";
+        if (opt.valSelectTopK < 1) {
+            std::cerr << "--val-select-topk must be >= 1, got " << opt.valSelectTopK << "\n";
             return 1;
         }
-        if (selectByVal && valMaps.empty()) {
+        if (opt.selectByVal && valMaps.empty()) {
             std::cerr << "--select-by-val requires --val-maps (or an auto val split)\n";
             return 1;
         }
 
         // ----- --map-weights: parse and validate ----------------------------
-        if (!mapWeightsArg.empty()) {
-            auto tokens = splitComma(mapWeightsArg);
+        if (!opt.mapWeightsArg.empty()) {
+            auto tokens = splitComma(opt.mapWeightsArg);
             if ((int)tokens.size() != (int)trainMaps.size()) {
                 std::cerr << "--map-weights must have exactly " << trainMaps.size()
                           << " values (one per train map); got " << tokens.size() << "\n";
@@ -728,13 +720,13 @@ int main(int argc, char* argv[]) {
         }
 
         // ----- --finetune-map: override maps and force single-map mode ------
-        if (!finetuneMapArg.empty()) {
-            if (loadPath.empty()) {
+        if (!opt.finetuneMapArg.empty()) {
+            if (opt.loadPath.empty()) {
                 std::cerr << "--finetune-map requires --load <file.rnnw>\n";
                 return 1;
             }
             // Accept bare name (e.g. "map6_chicanes_infernais") or full path
-            std::string mapPath = finetuneMapArg;
+            std::string mapPath = opt.finetuneMapArg;
             if (mapPath.find('/') == std::string::npos && mapPath.find('\\') == std::string::npos)
                 mapPath = "maps/" + mapPath + (mapPath.size() >= 5 && mapPath.substr(mapPath.size()-5) == ".json" ? "" : ".json");
             trainMaps = { mapPath };
@@ -745,19 +737,19 @@ int main(int argc, char* argv[]) {
             mmCfg.mapWeights          = {};
             mmCfg.progressiveFrac     = 1.0f;
             std::cout << "Fine-tune mode: training only on " << mapPath
-                      << " from champion " << loadPath << "\n";
+                      << " from champion " << opt.loadPath << "\n";
         }
 
         // ----- Print config summary ------------------------------------------
-        std::string aggName = fitnessAggArg;
+        std::string aggName = opt.fitnessAggArg;
         if (fitnessAgg == FitnessAgg::CVaRRank || fitnessAgg == FitnessAgg::CVaRRaw)
-            aggName += " α=" + std::to_string(cvarAlpha);
+            aggName += " α=" + std::to_string(opt.cvarAlpha);
         std::cout << "Training: " << trainMaps.size() << " train map(s)";
         if (!valMaps.empty()) std::cout << ", " << valMaps.size() << " val map(s)";
         std::cout << " | agg=" << aggName
-                  << " | curriculum=" << curriculumArg
-                  << " | pop=" << cfg.population
-                  << " | gen=" << generations << "\n";
+                  << " | curriculum=" << opt.curriculumArg
+                  << " | pop=" << opt.sim.population
+                  << " | gen=" << opt.generations << "\n";
         for (size_t i = 0; i < trainMaps.size(); ++i)
             std::cout << "  train[" << i << "]: " << trainMaps[i] << "\n";
         for (size_t i = 0; i < valMaps.size(); ++i)
@@ -766,28 +758,28 @@ int main(int argc, char* argv[]) {
         // ----- Champion seed -------------------------------------------------
         const std::vector<float>* champion = nullptr;
         std::vector<float> championWeights;
-        if (!loadPath.empty()) {
-            championWeights = loadChampion(loadPath);
+        if (!opt.loadPath.empty()) {
+            championWeights = loadChampion(opt.loadPath);
             champion = &championWeights;
         }
 
-        if (cfg.headless) {
-            TrainingSession session(cfg, makeTrainer(algo), generations, outDir,
-                                    trainMaps, valMaps, mmCfg, champion, logCsv, testMaps);
+        if (opt.sim.headless) {
+            TrainingSession session(opt.sim, makeTrainer(opt.algo), opt.generations, opt.outDir,
+                                    trainMaps, valMaps, mmCfg, champion, opt.logCsv, testMaps);
             session.runAll();
             return 0;
         }
 
 #ifndef HEADLESS_ONLY
         bool multiMap = (trainMaps.size() > 1);
-        TrainingSession session(cfg, makeTrainer(algo), generations, outDir,
-                                trainMaps, valMaps, mmCfg, champion, logCsv, testMaps);
+        TrainingSession session(opt.sim, makeTrainer(opt.algo), opt.generations, opt.outDir,
+                                trainMaps, valMaps, mmCfg, champion, opt.logCsv, testMaps);
         Renderer renderer(900, 700, "assets/DejaVuSans.ttf");
 
         {
-        auto mapDir = std::filesystem::path(cfg.map).parent_path().string();
+        auto mapDir = std::filesystem::path(opt.sim.map).parent_path().string();
         auto maps = listMaps(mapDir);
-        int idx = findMapIndex(maps, cfg.map);
+        int idx = findMapIndex(maps, opt.sim.map);
 
         session.beginGeneration();
         using Clock = std::chrono::steady_clock;
@@ -844,8 +836,8 @@ int main(int argc, char* argv[]) {
     }
 
     // ---- headless default ----
-    if (cfg.headless) {
-        Game game(cfg);
+    if (opt.sim.headless) {
+        Game game(opt.sim);
         double secs = game.runHeadlessEpisode();
         std::cout << "Headless episode done in " << secs << "s\n";
         return 0;
@@ -853,12 +845,12 @@ int main(int argc, char* argv[]) {
 
     // ---- windowed default ----
 #ifndef HEADLESS_ONLY
-    Game game(cfg);
+    Game game(opt.sim);
     {
         std::vector<std::unique_ptr<AIController>> ctrls;
         ctrls.push_back(std::make_unique<HumanController>());
-        std::mt19937 rng(cfg.seed + 1);
-        for (int i = 1; i < cfg.population; ++i)
+        std::mt19937 rng(opt.sim.seed + 1);
+        for (int i = 1; i < opt.sim.population; ++i)
             ctrls.push_back(std::make_unique<NeuralNetworkController>(
                 NeuralNetwork(defaultTopology(), (unsigned)rng())));
         game.setControllers(std::move(ctrls));
@@ -868,9 +860,9 @@ int main(int argc, char* argv[]) {
     game.reset();
 
     {
-    auto mapDir = std::filesystem::path(cfg.map).parent_path().string();
+    auto mapDir = std::filesystem::path(opt.sim.map).parent_path().string();
     auto maps = listMaps(mapDir);
-    int idx = findMapIndex(maps, cfg.map);
+    int idx = findMapIndex(maps, opt.sim.map);
 
     using Clock = std::chrono::steady_clock;
     auto prev = Clock::now();
