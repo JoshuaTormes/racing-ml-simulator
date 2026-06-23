@@ -28,6 +28,12 @@ target_include_directories(nlohmann_json INTERFACE ${nlohmann_json_SOURCE_DIR}/i
 
 set(SIM_SOURCES
   src/main.cpp
+  src/cli/Util.cpp
+  src/cli/Usage.cpp
+  src/cli/ArgParser.cpp
+  src/cli/AppConfig.cpp
+  src/app/Runners.cpp
+  src/render/InteractiveLoop.cpp
   src/sim/Track.cpp
   src/sim/TrackGen.cpp
   src/sim/Car.cpp
